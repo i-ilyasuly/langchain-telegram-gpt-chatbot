@@ -1,9 +1,21 @@
+# Environment variables
 .env
+
+# Python cache
 __pycache__/
 *.py[cod]
 *.so
+
+# Virtual environment
 venv/
 env/
+
+# IDE folders
 .vscode/
 .idea/
+
+# macOS files
 .DS_Store
+
+# Vector Database folder
+db/
