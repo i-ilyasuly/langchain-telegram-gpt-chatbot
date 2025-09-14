@@ -1,84 +1,70 @@
-# Langchain Telegram GPT Chatbot | Make your own AI Telegram Chatbot with the document you have
+# Claude Telegram Bot
 
-This repository contains a Telegram chatbot powered by OpenAI's GPT-3.5-turbo and FAISS for document similarity search.
-The chatbot can understand text and voice messages, providing intelligent responses based on the user's input. In
-addition to its conversational capabilities, the chatbot also integrates with a document similarity search engine,
-allowing users to find relevant information in a collection of documents.
+Claude AI қуатымен жұмыс жасайтын Telegram боты.
 
-## Demo
+## Мүмкіндіктер
 
-[DeadlyAI](https://t.me/deadlyaibot)
+- Claude AI арқылы сұрақтарға жауап беру
+- Қазақ және ағылшын тілдерін қолдау
+- Жедел жауап беру
 
-## Features
+## Орнату
 
-- Text and voice message support
-- Conversational AI using OpenAI's GPT-3.5-turbo
-- Document similarity search with FAISS
-- Conversation history tracking
-- Google Text-to-Speech integration
-
-## Technologies
-
-- Python
-- OpenAI API
-- FAISS
-- Telebot
-- Google Text-to-Speech
-- SpeechRecognition
-- Pydub
-
-## Future Scope
-
-- Support for additional languages(한국어, 日本語, বাংলা etc.)
-- Integration with other messaging platforms
-- More advanced conversational features (e.g., context-aware responses)
-- Improved performance and scalability
-- Utilizing newer versions of OpenAI's models
-
-## Installation and Usage
-
-### Prerequisites
-
-- Python 3.7+
-- OpenAI API key
-- FAISS
-- Telegram bot token
-
-### Installation
-
-1. Go to [Langchain Chat](https://github.com/shamspias/langchain-chat) and create a model based on your document.
-2. Clone the repository
-
+### 1. Репозиторийді клондау
 ```bash
-git clone https://github.com/shamspias/langchain-chat.git
-cd langchain-chat
+git clone https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git
+cd YOUR_REPO_NAME
 ```
 
-3. Copy the Model into `models/` directory
-4. Create the virtual environment and active it Install the dependencies
-
+### 2. Виртуал орта жасау
 ```bash
-python3 -m venv venv
-. venv/bin/activate
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# немесе
+venv\Scripts\activate     # Windows
+```
+
+### 3. Тәуелділіктерді орнату
+```bash
 pip install -r requirements.txt
 ```
 
-5. Copy the example.env file and rename it to .env and give the values of the variables
-6. Run the application
-
+### 4. API кілттерін орнату
 ```bash
-python chatbot.py
+# .env файлын жасау
+cp .env.example .env
 ```
 
-7. Start chatting with your bot!
+`.env` файлына сіздің API кілттеріңізді қойыңыз:
+```
+TELEGRAM_BOT_TOKEN=сіздің_телеграм_токеніңіз
+CLAUDE_API_KEY=сіздің_claude_кілтіңіз
+```
 
-## License
-This project is licensed under the MIT [License](https://github.com/shamspias/langchain-telegram-gpt-chatbot/blob/main/LICENSE.txt). See the LICENSE file for details.
+### 5. Ботты іске қосу
+```bash
+python main.py
+```
 
-## Contributing
-Contributions are welcome! Please feel free to submit issues or pull requests to improve the chatbot's functionality, performance, or documentation.
+## API кілттерін алу
 
-## Acknowledgements
-- OpenAI for providing the GPT-3.5-turbo model
-- Facebook AI for developing the FAISS library
-- The developers of the various libraries and tools used in this project
+### Telegram Bot Token:
+1. [@BotFather](https://t.me/botfather) ботына барыңыз
+2. `/newbot` командасын жіберіңіз
+3. Бот атын беріңіз
+4. Токенді сақтаңыз
+
+### Claude API Key:
+1. [console.anthropic.com](https://console.anthropic.com) сайтына кіріңіз
+2. API Keys бөліміне барыңыз
+3. Жаңа кілт жасаңыз
+
+## Пайдалану
+
+1. Telegram-да ботыңызды тауып, `/start` командасын жіберіңіз
+2. Кез келген сұрақ қойыңыз
+3. Claude AI арқылы жауап алыңыз
+
+## Лицензия
+
+MIT License
