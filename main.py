@@ -103,7 +103,7 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     
     print("Бот іске қосылды...")
-    print("📝 Мәтін | 📷 Сурет | 🔍 OCR")
+    print("📝 Мәтін | 📷 Сурет | 🔍 OCR | ⚡ Стриминг")
     app.run_polling()
 
 if __name__ == '__main__':
