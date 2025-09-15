@@ -17,5 +17,7 @@ env/
 # macOS files
 .DS_Store
 
-# Vector Database folder
+# Vector Database folders
 db/
+db_text/
+halal_db_from_text/
