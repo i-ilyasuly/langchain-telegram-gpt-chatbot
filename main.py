@@ -69,16 +69,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     user_query = update.message.text.strip()
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
+    waiting_message = await update.message.reply_text("⏳ Жауап дайындалуда...")
+
     thread_id = context.user_data.get('thread_id')
     response_text, new_thread_id = await run_openai_assistant(user_query, thread_id)
     context.user_data['thread_id'] = new_thread_id
     
-    sent_message = await update.message.reply_text(response_text, reply_markup=reply_markup)
-    # Пайдаланушының сұрағын және боттың жауабын кейін feedback үшін сақтап қою
-    context.user_data[f'last_question_{sent_message.message_id}'] = user_query
-    context.user_data[f'last_answer_{sent_message.message_id}'] = response_text
+    await waiting_message.edit_text(response_text, reply_markup=reply_markup)
+    
+    context.user_data[f'last_question_{waiting_message.message_id}'] = user_query
+    context.user_data[f'last_answer_{waiting_message.message_id}'] = response_text
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -86,7 +87,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("👍", callback_data='like'), InlineKeyboardButton("👎", callback_data='dislike')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    waiting_message = await update.message.reply_text("⏳ Сурет талданып жатыр...")
     
     try:
         # 1-кезең: Суретті Claude-қа жіберіп, сипаттамасын алу
@@ -94,7 +95,18 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo_bytes = await photo_file.download_as_bytearray()
         image_data = base64.b64encode(photo_bytes).decode('utf-8')
         
-        claude_prompt = "Бұл суретті мұқият талдап, ішіндегі барлық объектілерді, брендтерді, өнім атауларын және кез келген мәтінді сипаттап бер. Сипаттаманы өте нақты және толық жаз."
+        claude_prompt = (
+            "Сенің міндетің - суреттен тек қана 'Халал Даму' дерекқорынан іздеуге болатын нақты ақпаратты анықтау. Жалпы сипаттама қажет емес.\n\n"
+            "Басты назарды мыналарға аудар:\n"
+            "1. Өнімнің немесе брендтің атауы.\n"
+            "2. Тауардың атын табуға тырыс, тауар атын оның сипаттамасымен немесе өнімнің ұран сөздерімен шатастырып алма!\n"
+            "3. Мекеменің атауы (мысалы, дүкеннің, дәмхананың маңдайшасындағы жазу).\n"
+            "4. Өнім құрамындағы Е-қоспалардың кодтары (мысалы, 'Е120', 'Е471').\n\n"
+            "5. Өндірушінің атауын да аықтауға тырыс. Егер ол суретте көрінсе, оны да жаз.\n\n"
+            "Тек осы табылған нақты атауларды немесе кодтарды тізім ретінде, әрқайсысын жаңа жолдан жазып бер. "
+            "Егер суреттен осындай нақты ақпарат табылмаса, 'Маңызды ақпарат табылмады' деп жауап бер."
+            "Жібермес бұрын барлық ақпаратты қайта тексер."
+        )
         
         claude_response = client_claude.messages.create(
             model="claude-3-haiku-20240307",
@@ -106,54 +118,50 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         image_description = claude_response.content[0].text
         
-        # 2-кезең: Claude-тың сипаттамасын OpenAI-ға жіберу
+        # --- ЖАҢАРТЫЛҒАН OPENAI PROMPT ---
+        # Енді OpenAI-ға бұйрық емес, ақылды тапсырма береміз
         final_query_to_openai = (
-            f"Пайдаланушы маған сурет жіберді. Мен ол суретті талдап, мынадай сипаттама алдым: "
-            f"'{image_description}'. Осы сипаттамаға сүйеніп, өзіңнің білім қорыңнан (жүктелген файлдардан) "
-            f"суреттегі өнімнің немесе мекеменің халал статусы туралы ақпаратты тауып, пайдаланушыға жауап бер."
+            f"Пайдаланушы маған өнімнің суретін жіберді. Менің көмекшім (Claude) суретті талдап, одан мынадай кілт сөздерді анықтады: '{image_description}'.\n\n"
+            f"Назар аудар: бұл көмекшінің талдауында қателіктер болуы мүмкін (мысалы, әріп қатесі немесе дұрыс танылмаған сөз). \n\n"
+            f"Сенің міндетің – осы кілт сөздерді негізге ала отырып, өзіңнің білім қорыңнан (жүктелген файлдардан) осы сөздердің әрқайсысын базаңнан іздеп көр. мекемелерді немесе қоспаларды жан-жақты ізде! "
+            f"Табылған ақпарат негізінде пайдаланушыға  толық жауап бер."
         )
+        # ------------------------------------
         
+        await waiting_message.edit_text("⏳ Ақпаратты іздеудемін...")
         thread_id = context.user_data.get('thread_id')
         openai_response, new_thread_id = await run_openai_assistant(final_query_to_openai, thread_id)
         context.user_data['thread_id'] = new_thread_id
 
-        sent_message = await update.message.reply_text(openai_response, reply_markup=reply_markup)
-        # Пайдаланушының сұрағын (сурет сипаттамасы) және боттың жауабын сақтау
-        context.user_data[f'last_question_{sent_message.message_id}'] = f"Image Query: {image_description}"
-        context.user_data[f'last_answer_{sent_message.message_id}'] = openai_response
-
-
+        await waiting_message.edit_text(openai_response, reply_markup=reply_markup)
+        context.user_data[f'last_question_{waiting_message.message_id}'] = f"Image Query: {image_description}"
+        context.user_data[f'last_answer_{waiting_message.message_id}'] = openai_response
     except Exception as e:
         print(f"Суретті өңдеу қатесі: {e}")
-        await update.message.reply_text(f"Суретті өңдеу кезінде қате шықты: {e}")
+        await waiting_message.edit_text(f"Суретті өңдеу кезінде қате шықты: {e}")
 
-# --- ЖАҢАРТЫЛҒАН: Батырмаларды басқанда іске қосылатын функция ---
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """👍/👎 батырмаларына жауап береді және нәтижені CSV файлына сақтайды"""
     query = update.callback_query
     await query.answer("Кері байланыс үшін рахмет!")
     
-    # Кері байланыс берілгеннен кейін батырмаларды өшіру
     await query.edit_message_reply_markup(reply_markup=None)
     
-    # Файлға жазылатын деректерді жинау
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     user_id = query.from_user.id
-    vote = query.data # "like" немесе "dislike"
+    vote = query.data
     
-    # Батырма басылған хабарламаға сәйкес сұрақ пен жауапты алу
     message_id = query.message.message_id
     question = context.user_data.get(f'last_question_{message_id}', 'Сұрақ табылмады')
     bot_answer = context.user_data.get(f'last_answer_{message_id}', 'Жауап табылмады')
 
-    # CSV файлына жазу
     file_exists = os.path.isfile('feedback.csv')
     with open('feedback.csv', 'a', newline='', encoding='utf-8') as csvfile:
         fieldnames = ['timestamp', 'user_id', 'question', 'bot_answer', 'vote']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
         if not file_exists:
-            writer.writeheader()  # Егер файл жаңа болса, тақырыптарды жазу
+            writer.writeheader()
         
         writer.writerow({
             'timestamp': timestamp,
@@ -164,7 +172,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         })
     
     print(f"Кері байланыс 'feedback.csv' файлына сақталды: User {user_id} '{vote}' деп басты.")
-# ----------------------------------------------------------------------
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
