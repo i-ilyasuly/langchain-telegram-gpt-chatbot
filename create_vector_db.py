@@ -1,60 +1,53 @@
-import pandas as pd
 import chromadb
 from sentence_transformers import SentenceTransformer
 from rich.console import Console
-from rich.progress import track
 
 console = Console()
+TXT_SOURCE_FILE = '2kezen-qmdb_output.txt'
+DB_PATH = "./db_text"  # Жаңа база үшін жаңа папка
+COLLECTION_NAME = "halal_data_from_text"
 
-# Жергілікті жерде жұмыс істейтін embedding моделін жүктеу
-# Бірінші рет іске қосқанда модель интернеттен жүктеледі (шамамен 500 МБ)
+# Embedding моделін жүктеу
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
-client_chroma = chromadb.PersistentClient(path="./db")
+# Векторлық базаны құру
+client_chroma = chromadb.PersistentClient(path=DB_PATH)
 collection = client_chroma.get_or_create_collection(
-    name="halal_data",
+    name=COLLECTION_NAME,
     metadata={"hnsw:space": "cosine"}
 )
 
 def main():
     try:
-        df_est = pd.read_csv('establishments.csv', dtype=str).fillna('')
-        df_add = pd.read_csv('additives.csv', dtype=str).fillna('')
-        console.print("✅ CSV файлдар сәтті оқылды.", style="green")
-    except FileNotFoundError:
-        console.print("❌ CSV файлдар табылмады. Алдымен 'converter.py' іске қосыңыз.", style="bold red")
+        with open(TXT_SOURCE_FILE, 'r', encoding='utf-8') as f:
+            full_text = f.read()
+        console.print(f"✅ '{TXT_SOURCE_FILE}' файлы сәтті оқылды.", style="green")
+    except Exception as e:
+        console.print(f"❌ Файлды оқу кезінде қате: {e}", style="bold red")
         return
-
-    documents = []
-    metadatas = []
-    ids = []
-
-    for index, row in df_est.iterrows():
-        doc_text = f"Мекеме аты: {row['name']}. Санаты: {row['category']}. Қаласы: {row['city']}. Мекенжайы: {row['address']}. Кілт сөздер: {row['keywords']}"
-        documents.append(doc_text)
-        metadatas.append({'source': 'establishments', 'original_text': doc_text})
-        ids.append(f"est_{row['id']}")
-
-    for index, row in df_add.iterrows():
-        doc_text = f"E-қоспа: {row['ecode']}. Атауы: {row['name']}. Статусы: {row['halal_status_name']}. Сипаттамасы: {row['description']}"
-        documents.append(doc_text)
-        metadatas.append({'source': 'additives', 'original_text': doc_text})
-        ids.append(f"add_{row['id']}")
-
-    console.print(f"Барлығы {len(documents)} құжат дайындалды. Векторлық түрге айналдыру басталды...", style="cyan")
     
-    # Модель арқылы векторларды жасау
+    # Файлды "------------------------------" белгісі арқылы жеке жазбаларға бөлу
+    records = full_text.split('------------------------------')
+    
+    # Бос жазбаларды алып тастау
+    documents = [rec.strip() for rec in records if rec.strip() and len(rec.strip()) > 50]
+    
+    console.print(f"Барлығы {len(documents)} құжат дайындалды. Векторға айналдыру басталды...", style="cyan")
+
+    # Векторларды жасау
     embeddings = model.encode(documents, show_progress_bar=True)
     
+    # ID-ларды генерациялау
+    ids = [f"doc_{i}" for i in range(len(documents))]
+
     # Деректерді базаға қосу
     collection.add(
         embeddings=embeddings.tolist(),
         documents=documents,
-        metadatas=metadatas,
         ids=ids
     )
 
-    console.print("✅ Векторлық деректер қоры сәтті жасалды! Енді 'main.py' файлын іске қосуға болады.", style="bold green")
+    console.print(f"✅ Векторлық база '{DB_PATH}' папкасында сәтті жасалды!", style="bold green")
 
 if __name__ == "__main__":
     main()

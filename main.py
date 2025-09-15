@@ -1,97 +1,115 @@
 import os
+import time
 import base64
-import chromadb
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from anthropic import Anthropic
+from openai import OpenAI
 from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer
 
+# --- API кілттерді және баптауларды жүктеу ---
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CLAUDE_API_KEY = os.getenv('CLAUDE_API_KEY')
-claude = Anthropic(api_key=CLAUDE_API_KEY)
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+OPENAI_ASSISTANT_ID = os.getenv('OPENAI_ASSISTANT_ID')
 
-# Embedding моделін бот іске қосылғанда бір рет жүктеп алу
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+# API клиенттерін инициализациялау
+client_claude = Anthropic(api_key=CLAUDE_API_KEY)
+client_openai = OpenAI(api_key=OPENAI_API_KEY)
 
-try:
-    client_chroma = chromadb.PersistentClient(path="./db")
-    collection = client_chroma.get_collection(name="halal_data")
-    print("✅ Векторлық деректер қорына сәтті қосылды.")
-    
-    # --- ДИАГНОСТИКАЛЫҚ КОД ---
-    record_count = collection.count()
-    print(f"📊 Векторлық базадағы жазбалар саны: {record_count}")
-    if record_count == 0:
-        print("❗️❗️❗️ ЕСКЕРТУ: Векторлық база бос. 'python create_vector_db.py' скриптін қайта іске қосыңыз.")
-    # ---------------------------
-
-except Exception as e:
-    print(f"❌ Векторлық деректер қорын іске қосу кезінде қате: {e}")
-    print("❗️ Алдымен 'python create_vector_db.py' скриптін іске қосыңыз.")
-    exit()
-
-SYSTEM_PROMPT = """Сен — «Халал Даму» деректер қорының ассистентісің. Саған '# Табылған ұқсас деректер:' бөлімінде векторлық іздеу арқылы табылған ең сәйкес ақпарат беріледі. Сенің міндетің — сол деректерді ғана пайдаланып, сұраққа әдемілеп, түсінікті форматта жауап беру. Егер ештеңе табылмаса, сыпайы түрде 'Кешіріңіз, сұранысыңызға сәйкес нақты ақпарат табылмады' деп жауап бер. Өзіңнен артық ақпарат қоспа."""
+# --- Telegram Боттың негізгі логикасы ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Сәлем! Халал мекеме/қоспа туралы сұраңыз немесе сурет жіберіңіз.")
+    await update.message.reply_text("Сәлем! Халал мекеме/қоспа туралы сұраңыз немесе өнімнің суретін жіберіңіз.")
+
+async def run_openai_assistant(user_query: str) -> str:
+    """OpenAI Assistant-ты іске қосып, жауапты алатын функция (ЕҢ ЖАҢА СИНТАКСИС)"""
+    if not OPENAI_ASSISTANT_ID:
+        return "Қате: OPENAI_ASSISTANT_ID .env файлында көрсетілмеген."
+        
+    try:
+        # 1. Жаңа "Thread" (диалог желісі) құрып, оған бірден сұрақты қосып, іске қосу
+        run = client_openai.beta.threads.create_and_run(
+            assistant_id=OPENAI_ASSISTANT_ID,
+            thread={
+                "messages": [
+                    {"role": "user", "content": user_query}
+                ]
+            }
+        )
+
+        # 2. Ассистенттің жауабын күту
+        while run.status != "completed":
+            time.sleep(0.5)
+            run = client_openai.beta.threads.runs.retrieve(thread_id=run.thread_id, run_id=run.id)
+            if run.status in ["failed", "cancelled", "expired"]:
+                error_message = run.last_error.message if run.last_error else 'Белгісіз қате'
+                print(f"Run сәтсіз аяқталды: {error_message}")
+                return f"Ассистент жұмысында қате: {error_message}"
+
+        # 3. Жауапты алу
+        messages = client_openai.beta.threads.messages.list(thread_id=run.thread_id)
+        assistant_response = messages.data[0].content[0].text.value
+        return assistant_response
+
+    except Exception as e:
+        print(f"OpenAI Assistant қатесі: {e}")
+        return f"OpenAI Assistant-пен байланысу кезінде қате шықты: {e}"
+
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Мәтіндік сұраныстарды өңдеу"""
     user_query = update.message.text.strip()
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-
-    try:
-        # Пайдаланушы сұрауын векторға айналдыру
-        query_embedding = embedding_model.encode(user_query).tolist()
-
-        # Векторлық базадан ең ұқсас 5 нәтижені іздеу
-        results = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=5
-        )
-        
-        found_data_text = "\n\n".join(results['documents'][0]) if results['documents'] and results['documents'][0] else "Ештеңе табылмады."
-
-    except Exception as e:
-        print(f"Векторлық іздеу қатесі: {e}")
-        found_data_text = "Ішкі қате: Деректерді іздеу кезінде мәселе туындады."
-
-    final_prompt = f"# Табылған ұқсас деректер:\n{found_data_text}\n\n# Пайдаланушы сұрағы:\n{user_query}"
-    try:
-        response = claude.messages.create(
-            model="claude-3-haiku-20240307", max_tokens=1500, system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": final_prompt}]
-        )
-        await update.message.reply_text(response.content[0].text)
-    except Exception as e:
-        await update.message.reply_text(f"Claude API қатесі: {e}")
+    
+    response_text = await run_openai_assistant(user_query)
+    await update.message.reply_text(response_text)
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Суретті сұраныстарды өңдеу (Гибридті модель)"""
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    
     try:
+        # 1-кезең: Суретті Claude-қа жіберіп, сипаттамасын алу
         photo_file = await update.message.photo[-1].get_file()
         photo_bytes = await photo_file.download_as_bytearray()
         image_data = base64.b64encode(photo_bytes).decode('utf-8')
-        caption = update.message.caption or "Бұл суретте не бейнеленген? Мәтін болса, оқып бер."
-
-        response = claude.messages.create(
-            model="claude-3-haiku-20240307", max_tokens=1024,
+        
+        claude_prompt = "Бұл суретті мұқият талдап, ішіндегі барлық объектілерді, брендтерді, өнім атауларын және кез келген мәтінді сипаттап бер. Сипаттаманы өте нақты және толық жаз."
+        
+        claude_response = client_claude.messages.create(
+            model="claude-3-haiku-20240307",
+            max_tokens=500,
             messages=[{"role": "user", "content": [
                 {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": image_data}},
-                {"type": "text", "text": caption}
+                {"type": "text", "text": claude_prompt}
             ]}]
         )
-        await update.message.reply_text(response.content[0].text)
+        image_description = claude_response.content[0].text
+        
+        # 2-кезең: Claude-тың сипаттамасын OpenAI-ға жіберу
+        final_query_to_openai = (
+            f"Пайдаланушы маған сурет жіберді. Мен ол суретті талдап, мынадай сипаттама алдым: "
+            f"'{image_description}'. Осы сипаттамаға сүйеніп, өзіңнің білім қорыңнан (жүктелген файлдардан) "
+            f"суреттегі өнімнің немесе мекеменің халал статусы туралы ақпаратты тауып, пайдаланушыға жауап бер."
+        )
+        
+        openai_response = await run_openai_assistant(final_query_to_openai)
+        await update.message.reply_text(openai_response)
+
     except Exception as e:
-        await update.message.reply_text(f"Суретті өңдеу қатесі: {e}")
+        print(f"Суретті өңдеу қатесі: {e}")
+        await update.message.reply_text(f"Суретті өңдеу кезінде қате шықты: {e}")
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    print("🚀 Бот іске қосылды... Векторлық деректер қорымен жұмыс істеуде.")
+    
+    print("🚀 Бот іске қосылды... OpenAI Assistants API негізінде жұмыс істеуде.")
     app.run_polling()
 
 if __name__ == '__main__':

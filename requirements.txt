@@ -7,3 +7,4 @@ chromadb
 rich
 numpy==1.26.4
 sentence-transformers
+openai>=1.12.0
