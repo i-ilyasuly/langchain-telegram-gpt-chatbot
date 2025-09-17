@@ -23,4 +23,5 @@ db_text/
 halal_db_from_text/
 
 # User-generated data
-feedback.csv
+feedback.csvmomyn-ai-v2-05ba2432d33b.json
+*.json
