@@ -1,5 +1,3 @@
-# main.py
-
 import os
 import asyncio
 import re
@@ -8,7 +6,7 @@ import csv
 from datetime import datetime
 import logging
 import json 
-from dotenv import load_dotenv # <--- ОСЫ ЖОЛ ФАЙЛДЫҢ БАСЫНА КӨШІРІЛДІ
+from dotenv import load_dotenv
 
 # --- Негізгі баптаулар ---
 logging.basicConfig(
@@ -18,15 +16,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- API кілттерді және баптауларды жүктеу ---
-load_dotenv() # <--- Енді бұл функция импортталғаннан кейін шақырылады
+load_dotenv()
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 OPENAI_ASSISTANT_ID = os.getenv('OPENAI_ASSISTANT_ID')
 WEBHOOK_URL = os.getenv('WEBHOOK_URL')
 
-# <--- GOOGLE CREDENTIALS ҮШІН ӨЗГЕРІСТЕР ---
+# --- GOOGLE CREDENTIALS ҮШІН ШЕШІМ ---
 gcp_credentials_json_str = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
-
 if gcp_credentials_json_str:
     try:
         json.loads(gcp_credentials_json_str)
@@ -35,15 +32,13 @@ if gcp_credentials_json_str:
             f.write(gcp_credentials_json_str)
         os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = creds_path
         logger.info("Google Cloud үшін уақытша credential файлы сәтті жасалды.")
-    except json.JSONDecodeError:
-        logger.error("GOOGLE_APPLICATION_CREDENTIALS ішіндегі JSON қате декодталды.")
     except Exception as e:
-        logger.error(f"Google credential файлы үшін уақытша файл жасау мүмкін болмады: {e}")
-# <--- GOOGLE CREDENTIALS ҮШІН ӨЗГЕРІСТЕРДІҢ СОҢЫ ---
+        logger.error(f"Google credential файлын өңдеу кезінде қате: {e}")
 
 import uvicorn
 from fastapi import FastAPI, Request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
+from telegram.error import RetryAfter
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, filters, ContextTypes, 
     CallbackQueryHandler, ConversationHandler,
@@ -56,7 +51,6 @@ from google.cloud import vision
 ADMIN_USER_IDS = [929307596]
 USER_IDS_FILE = "user_ids.csv"
 BROADCAST_MESSAGE = range(1)
-
 WAITING_MESSAGES = [
     "⏳ Талдап жатырмын...", "🤔 Іздеп жатырмын...", "🔎 Аз қалды...",
     "✍️ Жауапты дайындап жатырмын...", "✨ Міне-міне, дайын болады..."
@@ -66,7 +60,7 @@ WAITING_MESSAGES = [
 client_openai = OpenAI(api_key=OPENAI_API_KEY)
 client_vision = vision.ImageAnnotatorClient()
 
-# --- Қолданушы ақпаратын сақтау ---
+# --- БОТ ФУНКЦИЯЛАРЫ (Өзгеріссіз) ---
 def add_user_info(user):
     user_id = user.id
     full_name = user.full_name
@@ -81,8 +75,7 @@ def add_user_info(user):
                 try:
                     next(reader, None)
                     user_ids = {int(row[0]) for row in reader if row}
-                except (ValueError, IndexError):
-                    pass
+                except (ValueError, IndexError): pass
         if user_id not in user_ids:
             with open(USER_IDS_FILE, 'a', newline='', encoding='utf-8') as f:
                 fieldnames = ['user_id', 'full_name', 'username', 'language_code']
@@ -93,17 +86,11 @@ def add_user_info(user):
     except Exception as e:
         logger.error(f"Қолданушы ақпаратын сақтау кезінде қате: {e}")
 
-# --- Telegram Боттың негізгі логикасы ---
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     add_user_info(user)
     context.user_data.pop('thread_id', None)
-    
-    keyboard = [
-        [InlineKeyboardButton("📝 Мәтінмен сұрау", callback_data='ask_text')],
-        [InlineKeyboardButton("📸 Суретпен талдау", callback_data='ask_photo')],
-    ]
+    keyboard = [[InlineKeyboardButton("📝 Мәтінмен сұрау", callback_data='ask_text')], [InlineKeyboardButton("📸 Суретпен талдау", callback_data='ask_photo')]]
     if user.id in ADMIN_USER_IDS:
         keyboard.append([InlineKeyboardButton("🔐 Админ панелі", callback_data='admin_panel')])
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -346,6 +333,7 @@ app_fastapi = FastAPI()
 
 @app_fastapi.on_event("startup")
 async def startup_event():
+    # Хэндлерлерді тіркеу
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(broadcast_start_handler, pattern='^broadcast_start$')],
         states={BROADCAST_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_message_handler)]},
@@ -353,21 +341,25 @@ async def startup_event():
         per_user=True,
     )
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("feedback_stats", feedback_stats))
-    application.add_handler(CommandHandler("suspicious_list", suspicious_list))
-    application.add_handler(conv_handler)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(conv_handler)
     
     await application.initialize()
 
     if WEBHOOK_URL and WEBHOOK_URL.startswith("https://"):
-        await application.bot.set_webhook(
-            url=f"{WEBHOOK_URL}/telegram",
-            allowed_updates=Update.ALL_TYPES
-        )
-        logger.info(f"🚀 Бот Webhook режимінде іске қосылды: {WEBHOOK_URL}")
+        try:
+            await application.bot.set_webhook(
+                url=f"{WEBHOOK_URL}/telegram",
+                allowed_updates=Update.ALL_TYPES
+            )
+            logger.info(f"🚀 Бот Webhook режимінде іске қосылды: {WEBHOOK_URL}")
+        except RetryAfter as e:
+            logger.warning(f"Webhook орнату кезінде Flood control қатесі: {e}. Басқа жұмысшы орнатқан болуы мүмкін. Жұмысты жалғастырудамыз.")
+        except Exception as e:
+            logger.error(f"Webhook орнату кезінде белгісіз қате: {e}")
+            
     else:
         logger.warning("ℹ️ WEBHOOK_URL жарамсыз немесе көрсетілмеген. Бот Webhook-сыз іске қосылды.")
         await application.bot.delete_webhook()
