@@ -1,5 +1,8 @@
+
 python-telegram-bot
 openai
 google-cloud-vision
 python-dotenv
 pandas
+fastapi
+uvicorn[standard]
