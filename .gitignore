@@ -25,3 +25,15 @@ halal_db_from_text/
 # User-generated data
 feedback.csvmomyn-ai-v2-05ba2432d33b.json
 *.json
+
+# Log and data files
+*.csv
+*.log
+
+# Image files
+suspicious_images/
+*.jpg
+*.png
+
+# Environment files
+.env
