@@ -1,3 +1,4 @@
+# main.py
 
 import os
 import asyncio
@@ -45,7 +46,7 @@ from telegram.ext import (
     CallbackQueryHandler, ConversationHandler,
 )
 import openai
-from openai import AsyncOpenAI # <--- OpenAI-дың АСИНХРОНДЫ клиентын импорттау
+from openai import AsyncOpenAI
 from google.cloud import vision
 
 # --- Тұрақтылар ---
@@ -58,12 +59,11 @@ WAITING_MESSAGES = [
 ]
 
 # API клиенттерін инициализациялау
-client_openai = AsyncOpenAI(api_key=OPENAI_API_KEY) # <--- АСИНХРОНДЫ клиентті іске қосу
+client_openai = AsyncOpenAI(api_key=OPENAI_API_KEY)
 client_vision = vision.ImageAnnotatorClient()
 
 # --- БОТ ФУНКЦИЯЛАРЫ ---
 def add_user_info(user):
-    # ... (өзгеріссіз)
     user_id = user.id
     full_name = user.full_name
     username = user.username or "N/A"
@@ -89,7 +89,6 @@ def add_user_info(user):
         logger.error(f"Қолданушы ақпаратын сақтау кезінде қате: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # ... (өзгеріссіз)
     user = update.effective_user
     add_user_info(user)
     context.user_data.pop('thread_id', None)
@@ -100,20 +99,111 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = "Assalamualaikum! Төмендегі батырмалар арқылы қажетті әрекетті таңдаңыз немесе сұрағыңызды жаза беріңіз:"
     await update.message.reply_text(welcome_text, reply_markup=reply_markup)
 
-# --- OpenAI-мен жұмыс істейтін функцияларды толық асинхронды ету ---
+async def broadcast_start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    if user_id in ADMIN_USER_IDS:
+        await query.message.reply_text("Барлық қолданушыларға жіберілетін хабарламаның мәтінін енгізіңіз:")
+        return BROADCAST_MESSAGE
+    return ConversationHandler.END
+
+async def broadcast_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin_id = update.effective_user.id
+    if admin_id not in ADMIN_USER_IDS:
+        return ConversationHandler.END
+    message_text = update.message.text
+    await update.message.reply_text(f"'{message_text}' хабарламасы барлық қолданушыларға жіберілуде...")
+    user_ids = set()
+    if os.path.exists(USER_IDS_FILE):
+        with open(USER_IDS_FILE, 'r', newline='', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            next(reader, None)
+            user_ids = {int(row[0]) for row in reader if row}
+    sent_count = 0
+    failed_count = 0
+    for user_id in user_ids:
+        try:
+            await context.bot.send_message(chat_id=user_id, text=message_text)
+            sent_count += 1
+            await asyncio.sleep(0.1)
+        except Exception as e:
+            failed_count += 1
+            logger.error(f"ID {user_id} қолданушысына хабарлама жіберу сәтсіз аяқталды: {e}")
+    await update.message.reply_text(f"📬 Хабарлама тарату аяқталды!\n\n✅ Жеткізілді: {sent_count}\n❌ Жеткізілмеді: {failed_count}")
+    return ConversationHandler.END
+
+async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Хабарлама жіберу тоқтатылды.", reply_markup=ReplyKeyboardRemove())
+    return ConversationHandler.END
+
+async def feedback_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.message.reply_text("Статистика функциясы әзірленуде.")
+
+async def suspicious_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.message.reply_text("Күдікті тізім функциясы әзірленуде.")
+
+async def feedback_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Кері байланыс үшін рахмет!")
+    await query.edit_message_reply_markup(reply_markup=None)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    user_id = query.from_user.id
+    vote = query.data
+    message_id = query.message.message_id
+    question = context.user_data.get(f'last_question_{message_id}', 'Сұрақ табылмады')
+    bot_answer = context.user_data.get(f'last_answer_{message_id}', 'Жауап табылмады')
+    file_exists = os.path.isfile('feedback.csv')
+    with open('feedback.csv', 'a', newline='', encoding='utf-8') as csvfile:
+        fieldnames = ['timestamp', 'user_id', 'question', 'bot_answer', 'vote']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        if not file_exists: writer.writeheader()
+        writer.writerow({'timestamp': timestamp, 'user_id': user_id, 'question': question, 'bot_answer': bot_answer, 'vote': vote})
+    logger.info(f"Кері байланыс 'feedback.csv' файлына сақталды: User {user_id} '{vote}' деп басты.")
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    if query.data == 'ask_text':
+        await query.message.reply_text("Тексергіңіз келетін өнімнің, мекеменің немесе E-қоспаның атауын жазыңыз.")
+    elif query.data == 'ask_photo':
+        await query.message.reply_text("Талдау үшін өнімнің немесе оның құрамының суретін жіберіңіз.")
+    elif query.data == 'admin_panel':
+        if user_id in ADMIN_USER_IDS:
+            admin_keyboard = [
+                [InlineKeyboardButton("📊 Статистиканы көру", callback_data='feedback_stats')],
+                [InlineKeyboardButton("🧐 Күдікті тізім", callback_data='suspicious_list')],
+                [InlineKeyboardButton("📬 Хабарлама жіберу", callback_data='broadcast_start')],
+                [InlineKeyboardButton("🔄 Базаны жаңарту", callback_data='update_db_placeholder')]
+            ]
+            reply_markup = InlineKeyboardMarkup(admin_keyboard)
+            await query.message.reply_text("🔐 Админ панелі:", reply_markup=reply_markup)
+    elif query.data == 'feedback_stats':
+        if user_id in ADMIN_USER_IDS:
+            await feedback_stats(update, context)
+    elif query.data == 'suspicious_list':
+        if user_id in ADMIN_USER_IDS:
+            await suspicious_list(update, context)
+    elif query.data == 'update_db_placeholder':
+        if user_id in ADMIN_USER_IDS:
+            await query.message.reply_text("ℹ️ Бұл функция әзірге жасалу үстінде.")
+    elif query.data in ['like', 'dislike']:
+        await feedback_button_callback(update, context)
+
 async def run_openai_assistant(user_query: str, thread_id: str | None) -> tuple[str, str, object]:
     if not OPENAI_ASSISTANT_ID: 
         return "Қате: OPENAI_ASSISTANT_ID .env файлында көрсетілмеген.", thread_id, None
     try:
         if thread_id is None:
-            run = await client_openai.beta.threads.create_and_run( # <--- AWAIT қосылды
+            run = await client_openai.beta.threads.create_and_run(
                 assistant_id=OPENAI_ASSISTANT_ID,
                 thread={"messages": [{"role": "user", "content": user_query}]}
             )
             thread_id = run.thread_id
         else:
-            await client_openai.beta.threads.messages.create(thread_id=thread_id, role="user", content=user_query) # <--- AWAIT қосылды
-            run = await client_openai.beta.threads.runs.create(thread_id=thread_id, assistant_id=OPENAI_ASSISTANT_ID) # <--- AWAIT қосылды
+            await client_openai.beta.threads.messages.create(thread_id=thread_id, role="user", content=user_query)
+            run = await client_openai.beta.threads.runs.create(thread_id=thread_id, assistant_id=OPENAI_ASSISTANT_ID)
         return "", thread_id, run
     except openai.APIError as e:
         logger.error(f"OpenAI API қатесі: {e}")
@@ -152,10 +242,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     last_message_text = current_message_text
                 except Exception:
                     pass
-            run = await client_openai.beta.threads.runs.retrieve(thread_id=new_thread_id, run_id=run.id) # <--- AWAIT қосылды
+            run = await client_openai.beta.threads.runs.retrieve(thread_id=new_thread_id, run_id=run.id)
         
         if run.status == 'completed':
-            messages = await client_openai.beta.threads.messages.list(thread_id=new_thread_id, limit=1) # <--- AWAIT қосылды
+            messages = await client_openai.beta.threads.messages.list(thread_id=new_thread_id, limit=1)
             final_response = messages.data[0].content[0].text.value
             cleaned_response = re.sub(r'【.*?†source】', '', final_response).strip()
             
@@ -172,7 +262,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await waiting_message.edit_text("Жауап алу кезінде қате шықты.")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # ... (бұл функциядағы логика `handle_message`-ге ұқсас, бірақ `run` және `messages` шақыруларына `await` қосылады)
     keyboard = [[InlineKeyboardButton("👍", callback_data='like'), InlineKeyboardButton("👎", callback_data='dislike')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -220,10 +309,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     last_message_text = current_message_text
                 except Exception:
                     pass
-            run = await client_openai.beta.threads.runs.retrieve(thread_id=new_thread_id, run_id=run.id) # <--- AWAIT қосылды
+            run = await client_openai.beta.threads.runs.retrieve(thread_id=new_thread_id, run_id=run.id)
         
         if run.status == 'completed':
-            messages = await client_openai.beta.threads.messages.list(thread_id=new_thread_id, limit=1) # <--- AWAIT қосылды
+            messages = await client_openai.beta.threads.messages.list(thread_id=new_thread_id, limit=1)
             final_response = messages.data[0].content[0].text.value
             cleaned_response = re.sub(r'【.*?†source】', '', final_response).strip()
             
@@ -239,39 +328,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Суретті өңдеу қатесі: {e}")
         await waiting_message.edit_text("Суретті өңдеу кезінде қате шықты. Қайталап көріңіз.")
 
-
-async def feedback_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer("Кері байланыс үшін рахмет!")
-    await query.edit_message_reply_markup(reply_markup=None)
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    user_id = query.from_user.id
-    vote = query.data
-    message_id = query.message.message_id
-    question = context.user_data.get(f'last_question_{message_id}', 'Сұрақ табылмады')
-    bot_answer = context.user_data.get(f'last_answer_{message_id}', 'Жауап табылмады')
-    file_exists = os.path.isfile('feedback.csv')
-    with open('feedback.csv', 'a', newline='', encoding='utf-8') as csvfile:
-        fieldnames = ['timestamp', 'user_id', 'question', 'bot_answer', 'vote']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        if not file_exists: writer.writeheader()
-        writer.writerow({'timestamp': timestamp, 'user_id': user_id, 'question': question, 'bot_answer': bot_answer, 'vote': vote})
-    logger.info(f"Кері байланыс 'feedback.csv' файлына сақталды: User {user_id} '{vote}' деп басты.")
-
-async def feedback_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.message.reply_text("Статистика функциясы әзірленуде.")
-
-async def suspicious_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.message.reply_text("Күдікті тізім функциясы әзірленуде.")
-
 # --- Веб-серверді баптау ---
-
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 app_fastapi = FastAPI()
 
 @app_fastapi.on_event("startup")
 async def startup_event():
-    # ... (бұл бөлім өзгеріссіз қалады)
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(broadcast_start_handler, pattern='^broadcast_start$')],
         states={BROADCAST_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_message_handler)]},
@@ -304,23 +366,19 @@ async def startup_event():
 
 @app_fastapi.on_event("shutdown")
 async def shutdown_event():
-    # ... (өзгеріссіз)
     await application.shutdown()
     logger.info("🔚 Бот тоқтатылды.")
 
 @app_fastapi.post("/telegram")
 async def telegram_webhook(request: Request):
-    # ... (өзгеріссіз)
     update = Update.de_json(await request.json(), application.bot)
     await application.process_update(update)
     return {"status": "ok"}
 
 @app_fastapi.get("/")
 def index():
-    # ... (өзгеріссіз)
     return {"message": "Telegram Bot webhook режимінде жұмыс істеп тұр."}
 
 if __name__ == '__main__':
-    # ... (өзгеріссіз)
     logger.info("Серверді іске қосу үшін терминалда келесі команданы орындаңыз:")
     logger.info("uvicorn main:app_fastapi --reload")
