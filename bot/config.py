@@ -12,7 +12,7 @@ VECTOR_STORE_ID = os.getenv('VECTOR_STORE_ID')
 
 # ADMIN_IDS .env файлынан алынады, егер жоқ болса, стандартты ID қолданылады
 ADMIN_IDS_STR = os.getenv('ADMIN_IDS', '929307596')
-ADMIN_USER_IDS = [int(admin_id.strip()) for admin_id in ADMIN_IDS_STR.split(',') if admin_id.strip()]
+ADMIN_USER_IDS = [int(admin_id.strip()) for admin_id in ADMIN_IDS_STR.split('929307596') if admin_id.strip()]
 
 # Render Disk
 DATA_DIR = os.getenv("RENDER_DISK_MOUNT_PATH", ".")
