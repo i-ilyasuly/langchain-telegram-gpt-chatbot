@@ -138,10 +138,85 @@ async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def feedback_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.message.reply_text("Статистика функциясы әзірленуде.")
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        # Қолданушылар санын есептеу
+        user_count = 0
+        if os.path.exists(USER_IDS_FILE):
+            with open(USER_IDS_FILE, 'r', newline='', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                next(reader)  # Бас тақырыпты өткізіп жіберу
+                user_count = sum(1 for row in reader)
+
+        # Кері байланыс санын есептеу
+        feedback_count = 0
+        likes = 0
+        dislikes = 0
+        if os.path.exists('feedback.csv'):
+            df = pd.read_csv('feedback.csv')
+            feedback_count = len(df)
+            if 'vote' in df.columns:
+                likes = df['vote'].value_counts().get('like', 0)
+                dislikes = df['vote'].value_counts().get('dislike', 0)
+
+        stats_text = (
+            f"📊 **Бот Статистикасы**\n\n"
+            f"👥 **Жалпы қолданушылар:** {user_count}\n"
+            f"📝 **Барлық пікірлер:** {feedback_count}\n"
+            f"👍 **Лайктар:** {likes}\n"
+            f"👎 **Дизлайктар:** {dislikes}"
+        )
+        await query.message.reply_text(stats_text, parse_mode='Markdown')
+
+    except FileNotFoundError:
+        await query.message.reply_text("⚠️ Статистика файлдары әлі құрылмаған.")
+    except Exception as e:
+        await query.message.reply_text(f"❌ Статистиканы алу кезінде қате пайда болды: {e}")
 
 async def suspicious_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.message.reply_text("Күдікті тізім функциясы әзірленуде.")
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        if not os.path.exists(SUSPICIOUS_LOG_FILE) or os.path.getsize(SUSPICIOUS_LOG_FILE) == 0:
+            await query.message.reply_text("ℹ️ Күдікті өнімдер тізімі бос.")
+            return
+
+        df = pd.read_csv(SUSPICIOUS_LOG_FILE)
+        if df.empty:
+            await query.message.reply_text("ℹ️ Күдікті өнімдер тізімі бос.")
+            return
+        
+        # Соңғы 5 жазбаны алу
+        last_5_suspicious = df.tail(5)
+
+        await query.message.reply_text(f"🧐 **Соңғы {len(last_5_suspicious)} күдікті өнім:**")
+
+        for index, row in last_5_suspicious.iterrows():
+            timestamp = row.get('timestamp', 'Белгісіз')
+            user_id = row.get('user_id', 'Белгісіз')
+            description = row.get('claude_description', 'Сипаттама жоқ')
+            image_path = row.get('image_path', None)
+
+            caption = (
+                f"🗓 **Уақыты:** `{timestamp}`\n"
+                f"👤 **Қолданушы ID:** `{user_id}`\n"
+                f"📝 **Сипаттама:**\n{description}"
+            )
+
+            if image_path and os.path.exists(image_path):
+                await query.message.reply_photo(photo=open(image_path, 'rb'), caption=caption, parse_mode='Markdown')
+            else:
+                await query.message.reply_text(caption, parse_mode='Markdown')
+            
+            await asyncio.sleep(0.5) # Телеграмды спамнан қорғау
+
+    except FileNotFoundError:
+        await query.message.reply_text("⚠️ `suspicious_products.csv` файлы табылмады.")
+    except Exception as e:
+        await query.message.reply_text(f"❌ Күдікті тізімді алу кезінде қате пайда болды: {e}")
 
 async def feedback_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
