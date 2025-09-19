@@ -34,7 +34,7 @@ async def feedback_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
                       f"👎 **Дизлайктар:** {dislikes}")
         await query.message.reply_text(stats_text, parse_mode='Markdown')
     except Exception as e:
-        await query.message.reply_text(f"❌ Статистиканы алу кезінде қате: {e}")
+        await query.message.reply_text(f"❌ Статистиканы алу кезінде қате пайда болды: {e}")
 
 async def suspicious_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query

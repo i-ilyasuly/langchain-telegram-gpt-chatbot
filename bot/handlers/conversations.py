@@ -2,17 +2,18 @@
 import logging
 import asyncio
 import os
+import csv
 from telegram import Update, ReplyKeyboardRemove
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram.ext import ContextTypes, ConversationHandler, CallbackQueryHandler, MessageHandler, filters, CommandHandler
 
 from bot.config import ADMIN_USER_IDS, VECTOR_STORE_ID, BROADCAST_MESSAGE, WAITING_FOR_UPDATE_FILE
 from bot.utils import client_openai
-from bot.database import get_user_count # get_all_user_ids керек болады
+# from bot.database import get_all_user_ids # Бұл функцияны database.py-ға қосу керек болады
 
 logger = logging.getLogger(__name__)
 
 # --- Broadcast Conversation ---
-async def broadcast_start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def broadcast_start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     if query.from_user.id in ADMIN_USER_IDS:
@@ -20,17 +21,19 @@ async def broadcast_start_handler(update: Update, context: ContextTypes.DEFAULT_
         return BROADCAST_MESSAGE
     return ConversationHandler.END
 
-async def broadcast_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Бұл функцияны database.py-дан барлық user_id алу үшін өзгерту керек
-    await update.message.reply_text("Бұл функция дерекқорға бейімделуі керек.")
+async def broadcast_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    # Бұл функция дерекқормен жұмыс істеуі керек
+    await update.message.reply_text("Ескерту: Хабарлама жіберу функциясы әзірге CSV файлмен жұмыс істейді және дерекқорға бейімделуі керек.")
+    # user_ids = get_all_user_ids() # Болашақта осылай болады
+    # for user_id in user_ids: ...
     return ConversationHandler.END
 
-async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Хабарлама жіберу тоқтатылды.")
     return ConversationHandler.END
 
 # --- Update DB Conversation ---
-async def update_db_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def update_db_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     if query.from_user.id in ADMIN_USER_IDS:
@@ -38,7 +41,7 @@ async def update_db_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_FOR_UPDATE_FILE
     return ConversationHandler.END
 
-async def update_db_receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def update_db_receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     message = update.message
     if not VECTOR_STORE_ID:
         await message.reply_text("Қате: VECTOR_STORE_ID орнатылмаған!")
@@ -59,7 +62,7 @@ async def update_db_receive_file(update: Update, context: ContextTypes.DEFAULT_T
         await waiting_message.edit_text(f"❌ Қате: {e}")
     return ConversationHandler.END
 
-async def update_db_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def update_db_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Базаны жаңарту тоқтатылды.")
     return ConversationHandler.END
 
