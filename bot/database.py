@@ -4,6 +4,7 @@ import sqlite3
 import os
 from datetime import datetime
 import logging
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,63 @@ def get_all_user_ids():
     except Exception as e:
         logger.error(f"Барлық қолданушы ID-ларын алу кезінде қате: {e}")
         return []
+def is_user_premium(user_id: int) -> bool:
+    """Қолданушының жарамды премиум жазылымы бар-жоғын тексереді."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT is_premium, subscription_end_date FROM users WHERE user_id = ?", (user_id,))
+        user_data = cursor.fetchone()
+        conn.close()
+        
+        if not user_data:
+            return False
+            
+        is_premium, end_date_str = user_data
+        
+        if not is_premium or not end_date_str:
+            return False
+            
+        # Жазылымның аяқталу күнін бүгінгі күнмен салыстыру
+        end_date = datetime.fromisoformat(end_date_str)
+        if end_date > datetime.now():
+            return True # Жазылым жарамды
+            
+    except Exception as e:
+        logger.error(f"Премиум статусын тексеру кезінде қате (user_id: {user_id}): {e}")
+        return False
+        
+    return False # Жазылым мерзімі өтіп кеткен немесе басқа қате
+def grant_premium_access(user_id: int, days: int):
+    """Қолданушыға белгілі бір күнге премиум жазылым береді."""
+    end_date = datetime.now() + timedelta(days=days)
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE users SET is_premium = 1, subscription_end_date = ? WHERE user_id = ?",
+            (end_date.isoformat(), user_id)
+        )
+        conn.commit()
+        conn.close()
+        logger.info(f"{user_id} қолданушысына {days} күнге премиум берілді.")
+    except Exception as e:
+        logger.error(f"Премиум беру кезінде қате (user_id: {user_id}): {e}")
 
+def revoke_premium_access(user_id: int):
+    """Қолданушының премиум жазылымын тоқтатады."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE users SET is_premium = 0, subscription_end_date = NULL WHERE user_id = ?",
+            (user_id,)
+        )
+        conn.commit()
+        conn.close()
+        logger.info(f"{user_id} қолданушысының премиум жазылымы тоқтатылды.")
+    except Exception as e:
+        logger.error(f"Премиумды тоқтату кезінде қате (user_id: {user_id}): {e}")
 # Ең бірінші рет импортталғанда дерекқорды дайындау
 init_db()

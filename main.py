@@ -6,6 +6,8 @@ from fastapi import FastAPI, Request
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler
 from telegram.error import RetryAfter
+from bot.handlers.admin import button_handler, grant_premium, revoke_premium # импорттарды жаңарту
+from bot.handlers.common import start, handle_message, handle_photo, premium_info
 
 from bot.config import TELEGRAM_TOKEN, WEBHOOK_URL
 from bot.handlers.common import start, handle_message, handle_photo
@@ -29,6 +31,9 @@ async def lifespan(app: FastAPI):
     # Бірақ қазіргі жағдайды түзету үшін webhook-ты орнату кезінде қателерді ұстап аламыз.
 
     # Хэндлерлерді тіркеу
+    application.add_handler(CommandHandler("premium", premium_info))
+    application.add_handler(CommandHandler("grant_premium", grant_premium))
+    application.add_handler(CommandHandler("revoke_premium", revoke_premium))
     application.add_handler(broadcast_conv_handler)
     application.add_handler(update_db_conv_handler)
     application.add_handler(CommandHandler("start", start))

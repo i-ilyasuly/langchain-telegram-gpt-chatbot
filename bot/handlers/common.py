@@ -8,31 +8,63 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from google.cloud import vision
 
-from bot.database import add_or_update_user
-from bot.utils import get_text, get_language_instruction, run_openai_assistant, client_openai
+# --- Импорттарды реттеу ---
+# Конфигурация, утилиталар және базадан қажетті функцияларды бір жерге жинау
 from bot.config import ADMIN_USER_IDS, WAITING_MESSAGES
+from bot.utils import get_text, get_language_instruction, run_openai_assistant, client_openai
+from bot.database import add_or_update_user, is_user_premium
 
+# --- Негізгі баптаулар ---
 logger = logging.getLogger(__name__)
 client_vision = vision.ImageAnnotatorClient()
 
+
+# --- Хэндлер функциялары ---
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/start командасын өңдейді, қолданушыны базаға қосады/жаңартады."""
     user = update.effective_user
     add_or_update_user(user.id, user.full_name, user.username, user.language_code)
     context.user_data.pop('thread_id', None)
     lang_code = user.language_code
+    
     keyboard = [
         [InlineKeyboardButton(get_text('ask_text_button', lang_code), callback_data='ask_text')],
         [InlineKeyboardButton(get_text('ask_photo_button', lang_code), callback_data='ask_photo')],
     ]
     if user.id in ADMIN_USER_IDS:
         keyboard.append([InlineKeyboardButton(get_text('admin_panel_button', lang_code), callback_data='admin_panel')])
+    
     reply_markup = InlineKeyboardMarkup(keyboard)
     welcome_text = get_text('welcome_message', lang_code)
     await update.message.reply_text(welcome_text, reply_markup=reply_markup)
 
+
+async def premium_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/premium командасын өңдейді, жазылым туралы ақпарат береді."""
+    premium_text = (
+        "👑 *Premium Жазылым Артықшылықтары*\n\n"
+        "✅ Шектеусіз мәтіндік сұраныстар\n"
+        "✅ Сурет арқылы өнімді талдау мүмкіндігі\n"
+        "✅ Жауап алу кезегінде бірінші орын\n\n"
+        "Жазылымды сатып алу үшін админге хабарласыңыз: @ilyasuly" # Өз админ username-іңізді жазыңыз
+    )
+    await update.message.reply_text(premium_text, parse_mode='Markdown')
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Кіріс мәтіндік хабарламаларды өңдейді."""
     user = update.effective_user
     lang_code = user.language_code
+    
+    # --- Премиум тексерісі ---
+    if not is_user_premium(user.id) and user.id not in ADMIN_USER_IDS:
+        await update.message.reply_text(
+            "❗ Бұл функция тек Premium жазылушылар үшін қолжетімді.\n\n"
+            "Жазылым туралы ақпарат алу үшін /premium командасын теріңіз."
+        )
+        return
+
     user_query_original = update.message.text.strip()
     logger.info(f"User {user.id} ({user.full_name}) sent text: '{user_query_original}'")
 
@@ -69,9 +101,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Хабарламаны өңдеу қатесі (User ID: {user.id}): {e}")
         await waiting_message.edit_text("Жауап алу кезінде қате шықты.")
 
+
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Кіріс суреттерді өңдейді."""
     user = update.effective_user
     lang_code = user.language_code
+    
+    # --- Премиум тексерісі ---
+    if not is_user_premium(user.id) and user.id not in ADMIN_USER_IDS:
+        await update.message.reply_text(
+            "❗ Суретпен талдау функциясы тек Premium жазылушылар үшін қолжетімді.\n\n"
+            "Жазылым туралы ақпарат алу үшін /premium командасын теріңіз."
+        )
+        return
+
     logger.info(f"User {user.id} ({user.full_name}) sent a photo.")
     keyboard = [[InlineKeyboardButton("👍", callback_data='like'), InlineKeyboardButton("👎", callback_data='dislike')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -90,10 +133,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await waiting_message.edit_text(get_text('photo_analyzed_prompt', lang_code))
         
         language_instruction = get_language_instruction(lang_code)
-        final_query_to_openai = (f"{language_instruction} "
-                                 f"Пайдаланушы маған сурет жіберді. Google Vision суреттен мынадай мәтінді оқыды: '{image_description}'.\n\n"
-                                 "Осы мәтіндегі негізгі атауларды анықтап, сол бойынша өзіңнің білім қорыңнан ақпаратты ізде. "
-                                 "Табылған ақпарат негізінде, суреттегі өнімнің халал статусы туралы толық жауап бер.")
+        final_query_to_openai = (
+            f"{language_instruction} "
+            f"Пайдаланушы маған сурет жіберді. Google Vision суреттен мынадай мәтінді оқыды: '{image_description}'.\n\n"
+            "Осы мәтіндегі негізгі атауларды анықтап, сол бойынша өзіңнің білім қорыңнан ақпаратты ізде. "
+            "Табылған ақпарат негізінде, суреттегі өнімнің халал статусы туралы толық жауап бер."
+        )
         
         thread_id = context.user_data.get('thread_id')
         response_text, new_thread_id, run = await run_openai_assistant(final_query_to_openai, thread_id)

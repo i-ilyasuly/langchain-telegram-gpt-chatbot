@@ -12,6 +12,7 @@ from telegram.ext import ContextTypes
 from bot.database import get_user_count
 from bot.config import ADMIN_USER_IDS, FEEDBACK_FILE, SUSPICIOUS_LOG_FILE
 from bot.utils import get_text
+from bot.database import get_user_count, grant_premium_access, revoke_premium_access # импорттарды жаңарту
 
 logger = logging.getLogger(__name__)
 
@@ -107,3 +108,36 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await suspicious_list(update, context)
     elif query.data in ['like', 'dislike']:
         await feedback_button_callback(update, context)
+
+async def grant_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id not in ADMIN_USER_IDS:
+        return
+
+    try:
+        # Команда аргументтерін алу: /grant_premium user_id days
+        user_id_to_grant = int(context.args[0])
+        days = int(context.args[1])
+        
+        grant_premium_access(user_id_to_grant, days)
+        await update.message.reply_text(f"✅ {user_id_to_grant} қолданушысына {days} күнге премиум сәтті берілді.")
+    except (IndexError, ValueError):
+        await update.message.reply_text("❌ Қате қолданыс. Мысал: /grant_premium 12345678 30")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Қате: {e}")
+
+async def revoke_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id not in ADMIN_USER_IDS:
+        return
+
+    try:
+        # Команда аргументін алу: /revoke_premium user_id
+        user_id_to_revoke = int(context.args[0])
+        
+        revoke_premium_access(user_id_to_revoke)
+        await update.message.reply_text(f"✅ {user_id_to_revoke} қолданушысының премиум жазылымы тоқтатылды.")
+    except (IndexError, ValueError):
+        await update.message.reply_text("❌ Қате қолданыс. Мысал: /revoke_premium 12345678")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Қате: {e}")
