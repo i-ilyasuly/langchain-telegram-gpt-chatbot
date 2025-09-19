@@ -1,3 +1,4 @@
+# main.py
 
 import os
 import asyncio
@@ -55,7 +56,6 @@ def load_translations():
     except json.JSONDecodeError:
         logger.error("locales.json файлының форматы дұрыс емес.")
         translations = {}
-
 load_translations()
 
 def get_text(key, lang_code='kk'):
@@ -99,7 +99,43 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = get_text('welcome_message', lang_code)
     await update.message.reply_text(welcome_text, reply_markup=reply_markup)
 
-# ... (broadcast, update_db, button, run_openai, handle_message, handle_photo, feedback_button_callback функциялары өзгеріссіз қалады) ...
+async def broadcast_start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    if user_id in ADMIN_USER_IDS:
+        await query.message.reply_text("Барлық қолданушыларға жіберілетін хабарламаның мәтінін енгізіңіз:")
+        return BROADCAST_MESSAGE
+    return ConversationHandler.END
+
+async def broadcast_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin_id = update.effective_user.id
+    if admin_id not in ADMIN_USER_IDS:
+        return ConversationHandler.END
+    message_text = update.message.text
+    await update.message.reply_text(f"'{message_text}' хабарламасы барлық қолданушыларға жіберілуде...")
+    user_ids = set()
+    if os.path.exists(USER_IDS_FILE):
+        with open(USER_IDS_FILE, 'r', newline='', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            next(reader, None)
+            user_ids = {int(row[0]) for row in reader if row}
+    sent_count = 0
+    failed_count = 0
+    for user_id in user_ids:
+        try:
+            await context.bot.send_message(chat_id=user_id, text=message_text)
+            sent_count += 1
+            await asyncio.sleep(0.1)
+        except Exception as e:
+            failed_count += 1
+            logger.error(f"ID {user_id} қолданушысына хабарлама жіберу сәтсіз аяқталды: {e}")
+    await update.message.reply_text(f"📬 Хабарлама тарату аяқталды!\n\n✅ Жеткізілді: {sent_count}\n❌ Жеткізілмеді: {failed_count}")
+    return ConversationHandler.END
+
+async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Хабарлама жіберу тоқтатылды.", reply_markup=ReplyKeyboardRemove())
+    return ConversationHandler.END
 
 async def feedback_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -143,8 +179,6 @@ async def suspicious_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             timestamp = row.get('timestamp', 'Белгісіз')
             user_id = row.get('user_id', 'Белгісіз')
             description = row.get('claude_description', 'Сипаттама жоқ')
-            # Render-де жергілікті файлдар сақталмайтындықтан, суретті жіберу мүмкін емес.
-            # Болашақта суреттерді бөлек сақтау орнына (мысалы, S3) жүктеу керек.
             caption = (
                 f"🗓 **Уақыты:** `{timestamp}`\n"
                 f"👤 **Қолданушы ID:** `{user_id}`\n"
@@ -384,14 +418,32 @@ application = Application.builder().token(TELEGRAM_TOKEN).build()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Сервер іске қосылғанда орындалатын код
-    # ... (ConversationHandler анықтамалары өзгеріссіз) ...
-    # Хэндлерлерді тіркеу
-    # ... (application.add_handler шақырулары өзгеріссіз) ...
+    broadcast_conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(broadcast_start_handler, pattern='^broadcast_start$')],
+        states={BROADCAST_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_message_handler)]},
+        fallbacks=[CommandHandler('cancel', cancel_broadcast)], per_user=True,
+    )
+    update_db_conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(update_db_start, pattern='^update_db_placeholder$')],
+        states={WAITING_FOR_UPDATE_FILE: [MessageHandler(filters.Document.ALL, update_db_receive_file)]},
+        fallbacks=[CommandHandler('cancel', update_db_cancel)], per_user=True,
+    )
+    application.add_handler(broadcast_conv_handler)
+    application.add_handler(update_db_conv_handler)
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    application.add_handler(CallbackQueryHandler(button_handler))
     
     await application.initialize()
     if WEBHOOK_URL and WEBHOOK_URL.startswith("https://"):
-        await application.bot.set_webhook(url=f"{WEBHOOK_URL}/telegram", allowed_updates=Update.ALL_TYPES)
-        logger.info(f"🚀 Бот Webhook режимінде іске қосылды: {WEBHOOK_URL}")
+        try:
+            await application.bot.set_webhook(url=f"{WEBHOOK_URL}/telegram", allowed_updates=Update.ALL_TYPES)
+            logger.info(f"🚀 Бот Webhook режимінде іске қосылды: {WEBHOOK_URL}")
+        except RetryAfter as e:
+            logger.warning(f"Webhook орнату кезінде Flood control қатесі: {e}.")
+        except Exception as e:
+            logger.error(f"Webhook орнату кезінде белгісіз қате: {e}")
     else:
         logger.warning("ℹ️ WEBHOOK_URL жарамсыз, бот Webhook-сыз іске қосылды.")
         await application.bot.delete_webhook()
@@ -405,18 +457,15 @@ async def lifespan(app: FastAPI):
 app_fastapi = FastAPI(lifespan=lifespan)
 
 @app_fastapi.post("/telegram")
-# ... (өзгеріссіз)
 async def telegram_webhook(request: Request):
     update = Update.de_json(await request.json(), application.bot)
     await application.process_update(update)
     return {"status": "ok"}
 
 @app_fastapi.get("/")
-# ... (өзгеріссіз)
 def index():
     return {"message": "Telegram Bot webhook режимінде жұмыс істеп тұр."}
 
 if __name__ == '__main__':
-    # ... (өзгеріссіз)
     logger.info("Серверді іске қосу үшін терминалда келесі команданы орындаңыз:")
     logger.info("python3 -m uvicorn main:app_fastapi --reload")
