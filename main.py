@@ -1,8 +1,9 @@
 # main.py
 import logging
+import httpx
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
-from telegram import Update
+from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler
 from telegram.error import RetryAfter
 
@@ -15,10 +16,18 @@ from bot.handlers.conversations import broadcast_conv_handler, update_db_conv_ha
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Application-ды глобалды түрде құру, бірақ инициализацияны кейінге қалдыру
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Webhook-ты тек бір рет орнату
+    # Бұл код gunicorn-ның негізгі процесінде ғана орындалуы керек, бірақ оны анықтау қиын.
+    # Сондықтан, webhook-ты бөлек скриптпен орнатуға немесе осында қалдырып,
+    # gunicorn жұмысшыларының санын 1-ге дейін азайтуға болады.
+    # Ең дұрысы - webhook-ты бөлек орнатып алу.
+    # Бірақ қазіргі жағдайды түзету үшін webhook-ты орнату кезінде қателерді ұстап аламыз.
+
     # Хэндлерлерді тіркеу
     application.add_handler(broadcast_conv_handler)
     application.add_handler(update_db_conv_handler)
@@ -28,9 +37,26 @@ async def lifespan(app: FastAPI):
     application.add_handler(CallbackQueryHandler(button_handler))
     
     await application.initialize()
-    if WEBHOOK_URL and WEBHOOK_URL.startswith("https://"):
-        await application.bot.set_webhook(url=f"{WEBHOOK_URL}/telegram", allowed_updates=Update.ALL_TYPES)
-        logger.info(f"🚀 Бот Webhook режимінде іске қосылды: {WEBHOOK_URL}")
+    if WEBHOOK_URL:
+        try:
+            # Webhook-ты орнату үшін Bot-ты бөлек инициализациялау
+            bot = Bot(token=TELEGRAM_TOKEN)
+            webhook_url_with_path = f"{WEBHOOK_URL}/telegram"
+            
+            # Ағымдағы webhook ақпаратын алу
+            current_webhook_info = await bot.get_webhook_info()
+
+            # Егер webhook URL басқа болса ғана жаңарту
+            if current_webhook_info.url != webhook_url_with_path:
+                await bot.set_webhook(url=webhook_url_with_path, allowed_updates=Update.ALL_TYPES)
+                logger.info(f"🚀 Webhook сәтті орнатылды: {webhook_url_with_path}")
+            else:
+                logger.info(f"ℹ️ Webhook қазірдің өзінде дұрыс орнатылған: {webhook_url_with_path}")
+
+        except RetryAfter as e:
+            logger.warning(f"Webhook орнату кезінде Flood control қатесі: {e}. Бұл gunicorn-ның бірнеше жұмысшысымен қалыпты жағдай.")
+        except Exception as e:
+            logger.error(f"Webhook орнату кезінде белгісіз қате: {e}")
     else:
         logger.warning("ℹ️ WEBHOOK_URL жарамсыз, бот Webhook-сыз іске қосылды.")
         await application.bot.delete_webhook()
@@ -39,6 +65,7 @@ async def lifespan(app: FastAPI):
     
     await application.shutdown()
     logger.info("🔚 Бот тоқтатылды.")
+
 
 app_fastapi = FastAPI(lifespan=lifespan)
 
