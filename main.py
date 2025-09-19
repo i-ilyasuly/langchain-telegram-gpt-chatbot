@@ -414,17 +414,23 @@ app_fastapi = FastAPI()
 
 @app_fastapi.on_event("startup")
 async def startup_event():
+    # ConversationHandler (диалогты басқару) хэндлерін құру
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(broadcast_start_handler, pattern='^broadcast_start$')],
         states={BROADCAST_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_message_handler)]},
         fallbacks=[CommandHandler('cancel', cancel_broadcast)],
         per_user=True,
     )
+
+    # --- ХЭНДЛЕРЛЕРДІ ТІРКЕУ РЕТІ ӨЗГЕРТІЛДІ ---
+    # 1. Арнайы диалогтарды басқаратын conv_handler бірінші тіркеледі
+    application.add_handler(conv_handler)
+
+    # 2. Қалған жалпы хэндлерлер содан кейін тіркеледі
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(CallbackQueryHandler(button_handler))
-    application.add_handler(conv_handler)
     
     await application.initialize()
 
