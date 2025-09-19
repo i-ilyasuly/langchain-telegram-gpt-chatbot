@@ -59,7 +59,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             final_response = messages.data[0].content[0].text.value
             cleaned_response = re.sub(r'【.*?†source】', '', final_response).strip()
             logger.info(f"Bot response for user {user.id}: '{cleaned_response[:100]}...'")
-            await waiting_message.edit_text(cleaned_response, reply_markup=reply_markup)
+            await waiting_message.edit_text(cleaned_response, reply_markup=reply_markup, parse_mode='Markdown')
             context.user_data[f'last_question_{waiting_message.message_id}'] = user_query_original
             context.user_data[f'last_answer_{waiting_message.message_id}'] = cleaned_response
         else:
@@ -75,7 +75,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"User {user.id} ({user.full_name}) sent a photo.")
     keyboard = [[InlineKeyboardButton("👍", callback_data='like'), InlineKeyboardButton("👎", callback_data='dislike')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    waiting_message = await update.message.reply_text(get_text('ask_photo_prompt', lang_code))
+    waiting_message = await update.message.reply_text(random.choice(WAITING_MESSAGES))
     
     try:
         photo_file = await update.message.photo[-1].get_file()
@@ -110,7 +110,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             messages = await client_openai.beta.threads.messages.list(thread_id=new_thread_id, limit=1)
             final_response = messages.data[0].content[0].text.value
             cleaned_response = re.sub(r'【.*?†source】', '', final_response).strip()
-            await waiting_message.edit_text(cleaned_response, reply_markup=reply_markup)
+            await waiting_message.edit_text(cleaned_response, reply_markup=reply_markup, parse_mode='Markdown')
             context.user_data[f'last_question_{waiting_message.message_id}'] = f"Image Query: {image_description}"
             context.user_data[f'last_answer_{waiting_message.message_id}'] = cleaned_response
         else:

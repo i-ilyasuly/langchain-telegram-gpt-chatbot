@@ -14,10 +14,10 @@ DB_FILE = os.path.join(DATA_DIR, "bot_users.db")
 def init_db():
     """Дерекқорды және 'users' кестесін жасайды (егер олар жоқ болса)."""
     os.makedirs(DATA_DIR, exist_ok=True)
-    
+
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    
+
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY,
@@ -29,7 +29,7 @@ def init_db():
         created_at TEXT NOT NULL
     )
     ''')
-    
+
     conn.commit()
     conn.close()
 
@@ -38,15 +38,15 @@ def add_or_update_user(user_id, full_name, username, language_code):
     try:
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
-        
+
         cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
         existing_user = cursor.fetchone()
-        
+
         current_time = datetime.now().isoformat()
 
         if existing_user:
             cursor.execute('''
-            UPDATE users 
+            UPDATE users
             SET full_name = ?, username = ?, language_code = ?
             WHERE user_id = ?
             ''', (full_name, username, language_code, user_id))
@@ -55,7 +55,7 @@ def add_or_update_user(user_id, full_name, username, language_code):
             INSERT INTO users (user_id, full_name, username, language_code, created_at)
             VALUES (?, ?, ?, ?, ?)
             ''', (user_id, full_name, username, language_code, current_time))
-            
+
         conn.commit()
         conn.close()
     except Exception as e:
@@ -76,6 +76,21 @@ def get_user_count():
     except Exception as e:
         logger.error(f"Қолданушылар санын алу кезінде қате: {e}")
         return 0
+
+def get_all_user_ids():
+    """Дерекқордағы барлық қолданушылардың ID тізімін қайтарады."""
+    if not os.path.exists(DB_FILE):
+        return []
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id FROM users")
+        user_ids = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return user_ids
+    except Exception as e:
+        logger.error(f"Барлық қолданушы ID-ларын алу кезінде қате: {e}")
+        return []
 
 # Ең бірінші рет импортталғанда дерекқорды дайындау
 init_db()

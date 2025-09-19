@@ -21,8 +21,8 @@ SUSPICIOUS_LOG_FILE = os.path.join(DATA_DIR, "suspicious_products.csv")
 USER_IDS_FILE = os.path.join(DATA_DIR, "user_ids.csv") # Бұл енді қолданылмайды, бірақ қауіпсіздік үшін қалдырамыз
 
 # Conversation States
-BROADCAST_MESSAGE = range(1)
-WAITING_FOR_UPDATE_FILE = range(2)
+BROADCAST_MESSAGE = 0
+WAITING_FOR_UPDATE_FILE = 1
 
 WAITING_MESSAGES = [
     "⏳ Талдап жатырмын...", "🤔 Іздеп жатырмын...", "🔎 Аз қалды...",
