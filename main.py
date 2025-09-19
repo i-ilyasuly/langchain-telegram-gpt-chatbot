@@ -9,6 +9,7 @@ from datetime import datetime
 import logging
 import json 
 from dotenv import load_dotenv
+import pandas as pd # <--- 1. ҚАТЕ ТҮЗЕТІЛДІ (pandas импорты қосылды)
 
 # --- Негізгі баптаулар ---
 logging.basicConfig(
@@ -52,6 +53,7 @@ from google.cloud import vision
 # --- Тұрақтылар ---
 ADMIN_USER_IDS = [929307596]
 USER_IDS_FILE = "user_ids.csv"
+SUSPICIOUS_LOG_FILE = "suspicious_products.csv" # <--- 2. ҚАТЕ ТҮЗЕТІЛДІ (айнымалы қосылды)
 BROADCAST_MESSAGE = range(1)
 WAITING_MESSAGES = [
     "⏳ Талдап жатырмын...", "🤔 Іздеп жатырмын...", "🔎 Аз қалды...",
@@ -142,15 +144,13 @@ async def feedback_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     try:
-        # Қолданушылар санын есептеу
         user_count = 0
         if os.path.exists(USER_IDS_FILE):
             with open(USER_IDS_FILE, 'r', newline='', encoding='utf-8') as f:
                 reader = csv.reader(f)
-                next(reader)  # Бас тақырыпты өткізіп жіберу
+                next(reader)
                 user_count = sum(1 for row in reader)
 
-        # Кері байланыс санын есептеу
         feedback_count = 0
         likes = 0
         dislikes = 0
@@ -189,7 +189,6 @@ async def suspicious_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("ℹ️ Күдікті өнімдер тізімі бос.")
             return
         
-        # Соңғы 5 жазбаны алу
         last_5_suspicious = df.tail(5)
 
         await query.message.reply_text(f"🧐 **Соңғы {len(last_5_suspicious)} күдікті өнім:**")
@@ -207,14 +206,16 @@ async def suspicious_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
             if image_path and os.path.exists(image_path):
-                await query.message.reply_photo(photo=open(image_path, 'rb'), caption=caption, parse_mode='Markdown')
+                # Render-де файлдарды сақтау/оқу күрделірек, сондықтан бұл жерде қате болуы мүмкін
+                # Бұл бөлімді болашақта Render-дің дискілік жүйесімен интеграциялау керек
+                await query.message.reply_text(caption, parse_mode='Markdown')
             else:
                 await query.message.reply_text(caption, parse_mode='Markdown')
             
-            await asyncio.sleep(0.5) # Телеграмды спамнан қорғау
+            await asyncio.sleep(0.5)
 
     except FileNotFoundError:
-        await query.message.reply_text("⚠️ `suspicious_products.csv` файлы табылмады.")
+        await query.message.reply_text(f"⚠️ `{SUSPICIOUS_LOG_FILE}` файлы табылмады.")
     except Exception as e:
         await query.message.reply_text(f"❌ Күдікті тізімді алу кезінде қате пайда болды: {e}")
 
@@ -238,13 +239,16 @@ async def feedback_button_callback(update: Update, context: ContextTypes.DEFAULT
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    
     user_id = query.from_user.id
     if query.data == 'ask_text':
+        await query.answer()
         await query.message.reply_text("Тексергіңіз келетін өнімнің, мекеменің немесе E-қоспаның атауын жазыңыз.")
     elif query.data == 'ask_photo':
+        await query.answer()
         await query.message.reply_text("Талдау үшін өнімнің немесе оның құрамының суретін жіберіңіз.")
     elif query.data == 'admin_panel':
+        await query.answer()
         if user_id in ADMIN_USER_IDS:
             admin_keyboard = [
                 [InlineKeyboardButton("📊 Статистиканы көру", callback_data='feedback_stats')],
@@ -261,6 +265,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_id in ADMIN_USER_IDS:
             await suspicious_list(update, context)
     elif query.data == 'update_db_placeholder':
+        await query.answer()
         if user_id in ADMIN_USER_IDS:
             await query.message.reply_text("ℹ️ Бұл функция әзірге жасалу үстінде.")
     elif query.data in ['like', 'dislike']:
