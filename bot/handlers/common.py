@@ -95,11 +95,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data[f'last_question_{waiting_message.message_id}'] = user_query_original
             context.user_data[f'last_answer_{waiting_message.message_id}'] = cleaned_response
         else:
-            error_message = run.last_error.message if run.last_error else 'Белгісіз қате'
-            await waiting_message.edit_text(f"Ассистент жұмысында қате: {error_message}")
+            # Егер OpenAI Assistant-тың жұмысы 'completed' статусымен аяқталмаса
+            error_message = "Белгісіз қате"
+            if run.last_error:
+                error_message = run.last_error.message
+            
+            # Қатені журналға (логқа) толық жазамыз
+            logger.error(f"OpenAI Assistant жұмысы аяқталмады, статусы: {run.status}, қате: {error_message}")
+            
+            # Қолданушыға түсінікті хабарлама береміз
+            user_friendly_error = (
+                "Кешіріңіз, жауапты өңдеу кезінде қате пайда болды.\n\n"
+                f"Техникалық ақпарат: `{run.status}`"
+            )
+            await waiting_message.edit_text(user_friendly_error, parse_mode='Markdown')
+
     except Exception as e:
-        logger.error(f"Хабарламаны өңдеу қатесі (User ID: {user.id}): {e}")
-        await waiting_message.edit_text("Жауап алу кезінде қате шықты.")
+        # Бұл блок енді тек күтпеген қателерді (мысалы, интернет байланысының үзілуі, кодтағы басқа қателер) ұстайды
+        logger.error(f"Хабарламаны өңдеу кезінде күтпеген қате (User ID: {user.id}): {e}", exc_info=True)
+        await waiting_message.edit_text(
+            "Кешіріңіз, күтпеген техникалық ақау пайда болды. "
+            "Администраторға хабарласыңыз."
+        )
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -164,3 +181,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Суретті өңдеу қатесі (User ID: {user.id}): {e}")
         await waiting_message.edit_text("Суретті өңдеу кезінде қате шықты.")
+
+async def language_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/language командасын өңдейді, тіл таңдау батырмаларын жібереді."""
+    keyboard = [
+        [InlineKeyboardButton("🇰🇿 Қазақша", callback_data='set_lang_kk')],
+        [InlineKeyboardButton("🇷🇺 Русский", callback_data='set_lang_ru')],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("Тілді таңдаңыз / Выберите язык:", reply_markup=reply_markup)

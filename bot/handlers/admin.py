@@ -5,6 +5,7 @@ import pandas as pd
 import asyncio
 import csv
 from datetime import datetime
+from bot.database import get_user_count, grant_premium_access, revoke_premium_access, update_user_language
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -108,6 +109,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await suspicious_list(update, context)
     elif query.data in ['like', 'dislike']:
         await feedback_button_callback(update, context)
+    elif query.data.startswith('set_lang_'):
+        new_lang_code = query.data.split('_')[-1] # 'kk' немесе 'ru' бөлігін алады
+        update_user_language(user.id, new_lang_code)
+        
+        # Жаңа тілдегі жауапты алу үшін get_text функциясын жаңа lang_code-пен шақырамыз
+        confirmation_text = get_text('language_changed_success', new_lang_code)
+        
+        await query.answer()
+        await query.edit_message_text(confirmation_text)
+
+    elif query.data == 'feedback_stats':
+        if user.id in ADMIN_USER_IDS:
+            await feedback_stats(update, context)
 
 async def grant_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user

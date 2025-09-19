@@ -150,5 +150,20 @@ def revoke_premium_access(user_id: int):
         logger.info(f"{user_id} қолданушысының премиум жазылымы тоқтатылды.")
     except Exception as e:
         logger.error(f"Премиумды тоқтату кезінде қате (user_id: {user_id}): {e}")
+def update_user_language(user_id: int, lang_code: str):
+    """Қолданушының тіл кодын дерекқорда жаңартады."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE users SET language_code = ? WHERE user_id = ?",
+            (lang_code, user_id)
+        )
+        conn.commit()
+        conn.close()
+        logger.info(f"{user_id} қолданушысы тілді '{lang_code}' деп өзгертті.")
+    except Exception as e:
+        logger.error(f"Тілді жаңарту кезінде қате (user_id: {user_id}): {e}")
+       
 # Ең бірінші рет импортталғанда дерекқорды дайындау
 init_db()
