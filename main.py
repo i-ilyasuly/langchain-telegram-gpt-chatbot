@@ -6,7 +6,7 @@ import re
 import random
 import csv
 from datetime import datetime
-import logging
+import logging # <--- ҚАТЕ ТҮЗЕТІЛДІ (осы жол қосылды)
 import json 
 from dotenv import load_dotenv
 import pandas as pd
@@ -88,11 +88,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     add_user_info(user)
     context.user_data.pop('thread_id', None)
-    keyboard = [[InlineKeyboardButton("📝 Мәтінмен сұрау", callback_data='ask_text')], [InlineKeyboardButton("📸 Суретпен талдау", callback_data='ask_photo')]]
+    
+    lang_code = user.language_code
+    
+    keyboard = [
+        [InlineKeyboardButton(get_text('ask_text_button', lang_code), callback_data='ask_text')],
+        [InlineKeyboardButton(get_text('ask_photo_button', lang_code), callback_data='ask_photo')],
+    ]
     if user.id in ADMIN_USER_IDS:
-        keyboard.append([InlineKeyboardButton("🔐 Админ панелі", callback_data='admin_panel')])
+        keyboard.append([InlineKeyboardButton(get_text('admin_panel_button', lang_code), callback_data='admin_panel')])
+        
     reply_markup = InlineKeyboardMarkup(keyboard)
-    welcome_text = "Assalamualaikum! Төмендегі батырмалар арқылы қажетті әрекетті таңдаңыз немесе сұрағыңызды жаза беріңіз:"
+    welcome_text = get_text('welcome_message', lang_code)
     await update.message.reply_text(welcome_text, reply_markup=reply_markup)
 
 async def broadcast_start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -216,7 +223,6 @@ async def feedback_button_callback(update: Update, context: ContextTypes.DEFAULT
         writer.writerow({'timestamp': timestamp, 'user_id': user_id, 'question': question, 'bot_answer': bot_answer, 'vote': vote})
     logger.info(f"Кері байланыс 'feedback.csv' файлына сақталды: User {user_id} '{vote}' деп басты.")
 
-# <--- БАЗАНЫ ЖАҢАРТУ ҮШІН ЖАҢА ФУНКЦИЯЛАР ---
 async def update_db_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -263,27 +269,30 @@ async def update_db_receive_file(update: Update, context: ContextTypes.DEFAULT_T
 async def update_db_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Базаны жаңарту тоқтатылды.")
     return ConversationHandler.END
-# <--- ЖАҢА ФУНКЦИЯЛАРДЫҢ СОҢЫ ---
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = query.from_user.id
+    user = query.from_user
+    user_id = user.id
+    lang_code = user.language_code
+    
     if query.data in ['ask_text', 'ask_photo', 'admin_panel']:
         await query.answer()
+    
     if query.data == 'ask_text':
-        await query.message.reply_text("Тексергіңіз келетін өнімнің, мекеменің немесе E-қоспаның атауын жазыңыз.")
+        await query.message.reply_text(get_text('ask_text_prompt', lang_code))
     elif query.data == 'ask_photo':
-        await query.message.reply_text("Талдау үшін өнімнің немесе оның құрамының суретін жіберіңіз.")
+        await query.message.reply_text(get_text('ask_photo_prompt', lang_code))
     elif query.data == 'admin_panel':
         if user_id in ADMIN_USER_IDS:
             admin_keyboard = [
-                [InlineKeyboardButton("📊 Статистиканы көру", callback_data='feedback_stats')],
-                [InlineKeyboardButton("🧐 Күдікті тізім", callback_data='suspicious_list')],
-                [InlineKeyboardButton("📬 Хабарлама жіберу", callback_data='broadcast_start')],
-                [InlineKeyboardButton("🔄 Базаны жаңарту", callback_data='update_db_placeholder')]
+                [InlineKeyboardButton(get_text('stats_button', lang_code), callback_data='feedback_stats')],
+                [InlineKeyboardButton(get_text('suspicious_list_button', lang_code), callback_data='suspicious_list')],
+                [InlineKeyboardButton(get_text('broadcast_button', lang_code), callback_data='broadcast_start')],
+                [InlineKeyboardButton(get_text('update_db_button', lang_code), callback_data='update_db_placeholder')]
             ]
             reply_markup = InlineKeyboardMarkup(admin_keyboard)
-            await query.message.reply_text("🔐 Админ панелі:", reply_markup=reply_markup)
+            await query.message.reply_text(get_text('admin_panel_title', lang_code), reply_markup=reply_markup)
     elif query.data == 'feedback_stats':
         if user_id in ADMIN_USER_IDS:
             await feedback_stats(update, context)
@@ -318,17 +327,29 @@ async def run_openai_assistant(user_query: str, thread_id: str | None) -> tuple[
         return "Белгісіз қате пайда болды. Администраторға хабарласыңыз.", thread_id, None
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    lang_code = user.language_code
+    logger.info(f"User {user.id} ({user.full_name}) sent a text message: '{update.message.text}'")
+
     keyboard = [[InlineKeyboardButton("👍", callback_data='like'), InlineKeyboardButton("👎", callback_data='dislike')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    user_query = update.message.text.strip()
+    
+    # OpenAI-ға жіберілетін сұранысқа тілдік нұсқаулықты қосу
+    language_instruction = get_language_instruction(lang_code)
+    user_query = language_instruction + update.message.text.strip()
+    
     waiting_message = await update.message.reply_text(random.choice(WAITING_MESSAGES))
+    
     try:
         thread_id = context.user_data.get('thread_id')
         response_text, new_thread_id, run = await run_openai_assistant(user_query, thread_id)
+        
         if run is None:
              await waiting_message.edit_text(response_text)
              return
+
         context.user_data['thread_id'] = new_thread_id
+        
         last_message_text = ""
         while run.status in ['in_progress', 'queued']:
             await asyncio.sleep(2)
@@ -339,47 +360,73 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     last_message_text = current_message_text
                 except Exception: pass
             run = await client_openai.beta.threads.runs.retrieve(thread_id=new_thread_id, run_id=run.id)
+        
         if run.status == 'completed':
             messages = await client_openai.beta.threads.messages.list(thread_id=new_thread_id, limit=1)
             final_response = messages.data[0].content[0].text.value
             cleaned_response = re.sub(r'【.*?†source】', '', final_response).strip()
+            
+            logger.info(f"Bot response for user {user.id}: '{cleaned_response[:100]}...'")
             await waiting_message.edit_text(cleaned_response, reply_markup=reply_markup)
-            context.user_data[f'last_question_{waiting_message.message_id}'] = user_query
+            
+            context.user_data[f'last_question_{waiting_message.message_id}'] = update.message.text.strip()
             context.user_data[f'last_answer_{waiting_message.message_id}'] = cleaned_response
         else:
             error_message = run.last_error.message if run.last_error else 'Белгісіз қате'
+            logger.error(f"OpenAI run failed for user {user.id}. Status: {run.status}, Error: {error_message}")
             await waiting_message.edit_text(f"Ассистент жұмысында қате: {error_message}")
+            
     except Exception as e:
-        logger.error(f"Хабарламаны өңдеу қатесі: {e}")
+        logger.error(f"Хабарламаны өңдеу қатесі (User ID: {user.id}): {e}")
         await waiting_message.edit_text("Жауап алу кезінде қате шықты.")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    lang_code = user.language_code
+    logger.info(f"User {user.id} ({user.full_name}) sent a photo.")
+    
     keyboard = [[InlineKeyboardButton("👍", callback_data='like'), InlineKeyboardButton("👎", callback_data='dislike')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
+    
     waiting_message = await update.message.reply_text("⏳ Суретті қабылдадым, талдауды бастаймын...")
+    
     try:
         photo_file = await update.message.photo[-1].get_file()
         photo_bytes = await photo_file.download_as_bytearray()
+        
         image = vision.Image(content=bytes(photo_bytes))
         response = client_vision.text_detection(image=image)
+        
         if response.error.message:
             raise Exception(f"Google Vision API қатесі: {response.error.message}")
+
         texts = response.text_annotations
         image_description = texts[0].description.replace('\n', ' ') if texts else "Суреттен мәтін табылмады."
+        logger.info(f"OCR result for user {user.id}: '{image_description[:100]}...'")
+        
         await waiting_message.edit_text("✅ Сурет талданды! Енді OpenAI арқылы ақпарат іздеп жатырмын...")
+        
+        # OpenAI-ға жіберілетін сұранысқа тілдік нұсқаулықты қосу
+        language_instruction = get_language_instruction(lang_code)
+
         final_query_to_openai = (
+            f"{language_instruction}"
             f"Пайдаланушы маған сурет жіберді. Google Vision суреттен мынадай мәтінді оқыды: '{image_description}'.\n\n"
             f"Осы мәтіндегі негізгі атауларды (өнім, бренд, мекеме) анықтап, "
             f"сол бойынша өзіңнің білім қорыңнан (файлдардан) ақпаратты ізде. Табылған ақпарат негізінде, "
             f"суреттегі өнімнің халал статусы туралы толық жауап бер. "
             f"Маңызды! Мен саған жалған халал сертификаттарды да жіберіп жатқан болуым мүмкін, сондықтан менің халал, сертификаты бар, т.с.с. сөздеріме сенбей өз базаңнан ізде! \n\n"
         )
+        
         thread_id = context.user_data.get('thread_id')
         response_text, new_thread_id, run = await run_openai_assistant(final_query_to_openai, thread_id)
+
         if run is None:
             await waiting_message.edit_text(response_text)
             return
+            
         context.user_data['thread_id'] = new_thread_id
+        
         last_message_text = ""
         while run.status in ['in_progress', 'queued']:
             await asyncio.sleep(2)
@@ -390,25 +437,52 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     last_message_text = current_message_text
                 except Exception: pass
             run = await client_openai.beta.threads.runs.retrieve(thread_id=new_thread_id, run_id=run.id)
+        
         if run.status == 'completed':
             messages = await client_openai.beta.threads.messages.list(thread_id=new_thread_id, limit=1)
             final_response = messages.data[0].content[0].text.value
             cleaned_response = re.sub(r'【.*?†source】', '', final_response).strip()
+            
+            logger.info(f"Bot response for user {user.id} (photo): '{cleaned_response[:100]}...'")
             await waiting_message.edit_text(cleaned_response, reply_markup=reply_markup)
+
             context.user_data[f'last_question_{waiting_message.message_id}'] = f"Image Query: {image_description}"
             context.user_data[f'last_answer_{waiting_message.message_id}'] = cleaned_response
         else:
             error_message = run.last_error.message if run.last_error else 'Белгісіз қате'
+            logger.error(f"OpenAI run failed for user {user.id} (photo). Status: {run.status}, Error: {error_message}")
             await waiting_message.edit_text(f"Ассистент жұмысында қате: {error_message}")
+        
     except Exception as e:
-        logger.error(f"Суретті өңдеу қатесі: {e}")
+        logger.error(f"Суретті өңдеу қатесі (User ID: {user.id}): {e}")
         await waiting_message.edit_text("Суретті өңдеу кезінде қате шықты. Қайталап көріңіз.")
+
+# --- Көптілділікті басқару ---
+try:
+    with open('locales.json', 'r', encoding='utf-8') as f:
+        translations = json.load(f)
+except FileNotFoundError:
+    logger.error("Аударма файлы (locales.json) табылмады.")
+    translations = {}
+except json.JSONDecodeError:
+    logger.error("locales.json файлының форматы дұрыс емес.")
+    translations = {}
+
+def get_text(key, lang_code='kk'):
+    lang = 'ru' if lang_code == 'ru' else 'kk'
+    return translations.get(lang, {}).get(key, translations.get('kk', {}).get(key, f"<{key}>"))
+
+def get_language_instruction(lang_code='kk'):
+    """OpenAI Assistant үшін тілдік нұсқаулықты дайындайды."""
+    if lang_code == 'ru':
+        return "Маңызды ереже: жауабыңды орыс тілінде қайтар. "
+    # Әдепкі бойынша қазақ тілінде жауап беруді сұрау
+    return "Маңызды ереже: жауабыңды қазақ тілінде қайтар. "
 
 # --- Веб-серверді баптау ---
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 app_fastapi = FastAPI()
 
-# <--- STARTUP EVENT-ке ЖАҢА CONVERSATIONHANDLER ҚОСУ ---
 @app_fastapi.on_event("startup")
 async def startup_event():
     # Broadcast үшін ConversationHandler
@@ -418,7 +492,6 @@ async def startup_event():
         fallbacks=[CommandHandler('cancel', cancel_broadcast)],
         per_user=True,
     )
-
     # Базаны жаңарту үшін ConversationHandler
     update_db_conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(update_db_start, pattern='^update_db_placeholder$')],
@@ -428,7 +501,6 @@ async def startup_event():
         fallbacks=[CommandHandler('cancel', update_db_cancel)],
         per_user=True,
     )
-
     # Хэндлерлерді тіркеу
     application.add_handler(broadcast_conv_handler)
     application.add_handler(update_db_conv_handler)
@@ -450,11 +522,9 @@ async def startup_event():
             logger.warning(f"Webhook орнату кезінде Flood control қатесі: {e}. Басқа жұмысшы орнатқан болуы мүмкін. Жұмысты жалғастырудамыз.")
         except Exception as e:
             logger.error(f"Webhook орнату кезінде белгісіз қате: {e}")
-            
     else:
         logger.warning("ℹ️ WEBHOOK_URL жарамсыз немесе көрсетілмеген. Бот Webhook-сыз іске қосылды.")
         await application.bot.delete_webhook()
-# <--- STARTUP EVENT-ТІҢ СОҢЫ ---
 
 @app_fastapi.on_event("shutdown")
 async def shutdown_event():
