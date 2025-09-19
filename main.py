@@ -9,7 +9,7 @@ from datetime import datetime
 import logging
 import json 
 from dotenv import load_dotenv
-import pandas as pd # <--- 1. ҚАТЕ ТҮЗЕТІЛДІ (pandas импорты қосылды)
+import pandas as pd
 
 # --- Негізгі баптаулар ---
 logging.basicConfig(
@@ -25,18 +25,8 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 OPENAI_ASSISTANT_ID = os.getenv('OPENAI_ASSISTANT_ID')
 WEBHOOK_URL = os.getenv('WEBHOOK_URL')
 
-# --- GOOGLE CREDENTIALS ҮШІН ШЕШІМ ---
-gcp_credentials_json_str = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
-if gcp_credentials_json_str:
-    try:
-        json.loads(gcp_credentials_json_str)
-        creds_path = "/tmp/gcp_creds.json"
-        with open(creds_path, "w") as f:
-            f.write(gcp_credentials_json_str)
-        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = creds_path
-        logger.info("Google Cloud үшін уақытша credential файлы сәтті жасалды.")
-    except Exception as e:
-        logger.error(f"Google credential файлын өңдеу кезінде қате: {e}")
+# GOOGLE_APPLICATION_CREDENTIALS айнымалысы енді тікелей Render-дегі файлға нұсқайды
+# Сондықтан уақытша файл жасайтын код блогы алынып тасталды.
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -53,7 +43,7 @@ from google.cloud import vision
 # --- Тұрақтылар ---
 ADMIN_USER_IDS = [929307596]
 USER_IDS_FILE = "user_ids.csv"
-SUSPICIOUS_LOG_FILE = "suspicious_products.csv" # <--- 2. ҚАТЕ ТҮЗЕТІЛДІ (айнымалы қосылды)
+SUSPICIOUS_LOG_FILE = "suspicious_products.csv"
 BROADCAST_MESSAGE = range(1)
 WAITING_MESSAGES = [
     "⏳ Талдап жатырмын...", "🤔 Іздеп жатырмын...", "🔎 Аз қалды...",
@@ -62,8 +52,9 @@ WAITING_MESSAGES = [
 
 # API клиенттерін инициализациялау
 client_openai = AsyncOpenAI(api_key=OPENAI_API_KEY)
-client_vision = vision.ImageAnnotatorClient()
+client_vision = vision.ImageAnnotatorClient() # Бұл енді автоматты түрде Secret File-ды табады
 
+# ... (Қалған барлық функциялар өзгеріссіз қалады) ...
 # --- БОТ ФУНКЦИЯЛАРЫ ---
 def add_user_info(user):
     user_id = user.id
@@ -206,9 +197,7 @@ async def suspicious_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
             if image_path and os.path.exists(image_path):
-                # Render-де файлдарды сақтау/оқу күрделірек, сондықтан бұл жерде қате болуы мүмкін
-                # Бұл бөлімді болашақта Render-дің дискілік жүйесімен интеграциялау керек
-                await query.message.reply_text(caption, parse_mode='Markdown')
+                await query.message.reply_photo(photo=open(image_path, 'rb'), caption=caption, parse_mode='Markdown')
             else:
                 await query.message.reply_text(caption, parse_mode='Markdown')
             
@@ -239,16 +228,16 @@ async def feedback_button_callback(update: Update, context: ContextTypes.DEFAULT
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    
     user_id = query.from_user.id
+    
+    if query.data in ['ask_text', 'ask_photo', 'admin_panel', 'update_db_placeholder']:
+        await query.answer() # Жауапты бірден жіберу
+    
     if query.data == 'ask_text':
-        await query.answer()
         await query.message.reply_text("Тексергіңіз келетін өнімнің, мекеменің немесе E-қоспаның атауын жазыңыз.")
     elif query.data == 'ask_photo':
-        await query.answer()
         await query.message.reply_text("Талдау үшін өнімнің немесе оның құрамының суретін жіберіңіз.")
     elif query.data == 'admin_panel':
-        await query.answer()
         if user_id in ADMIN_USER_IDS:
             admin_keyboard = [
                 [InlineKeyboardButton("📊 Статистиканы көру", callback_data='feedback_stats')],
@@ -265,7 +254,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_id in ADMIN_USER_IDS:
             await suspicious_list(update, context)
     elif query.data == 'update_db_placeholder':
-        await query.answer()
         if user_id in ADMIN_USER_IDS:
             await query.message.reply_text("ℹ️ Бұл функция әзірге жасалу үстінде.")
     elif query.data in ['like', 'dislike']:
@@ -414,19 +402,13 @@ app_fastapi = FastAPI()
 
 @app_fastapi.on_event("startup")
 async def startup_event():
-    # ConversationHandler (диалогты басқару) хэндлерін құру
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(broadcast_start_handler, pattern='^broadcast_start$')],
         states={BROADCAST_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_message_handler)]},
         fallbacks=[CommandHandler('cancel', cancel_broadcast)],
         per_user=True,
     )
-
-    # --- ХЭНДЛЕРЛЕРДІ ТІРКЕУ РЕТІ ӨЗГЕРТІЛДІ ---
-    # 1. Арнайы диалогтарды басқаратын conv_handler бірінші тіркеледі
     application.add_handler(conv_handler)
-
-    # 2. Қалған жалпы хэндлерлер содан кейін тіркеледі
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
