@@ -1,9 +1,9 @@
+# bot/database.py
 
 import sqlite3
 import os
-from datetime import datetime
-import logging
 from datetime import datetime, timedelta
+import logging
 
 logger = logging.getLogger(__name__)
 
@@ -11,27 +11,60 @@ logger = logging.getLogger(__name__)
 DATA_DIR = os.getenv("RENDER_DISK_MOUNT_PATH", ".") # Render Disk болмаса, ағымдағы директорияны қолдану
 DB_FILE = os.path.join(DATA_DIR, "bot_users.db")
 
+def _run_migrations(conn):
+    """Дерекқор кестесіне жетіспейтін бағандарды қосады."""
+    cursor = conn.cursor()
+    
+    # 'users' кестесінің ағымдағы бағандарын тексеру
+    cursor.execute("PRAGMA table_info(users)")
+    columns = [info[1] for info in cursor.fetchall()]
+
+    # Жетіспейтін бағандарды қосу
+    if 'text_requests_count' not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN text_requests_count INTEGER DEFAULT 0")
+        logger.info("`text_requests_count` бағаны қосылды.")
+    
+    if 'photo_requests_count' not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN photo_requests_count INTEGER DEFAULT 0")
+        logger.info("`photo_requests_count` бағаны қосылды.")
+    
+    if 'last_request_date' not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN last_request_date TEXT")
+        logger.info("`last_request_date` бағаны қосылды.")
+
+    if 'openai_thread_id' not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN openai_thread_id TEXT")
+        logger.info("`openai_thread_id` бағаны қосылды.")
+        
+    conn.commit()
+
 def init_db():
     """Дерекқорды және 'users' кестесін жасайды (егер олар жоқ болса)."""
     os.makedirs(DATA_DIR, exist_ok=True)
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
+
+    # Бірінші, кесте жоқ болса жасаймыз.
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY,
-    full_name TEXT,
-    username TEXT,
-    language_code TEXT,
-    is_premium INTEGER DEFAULT 0,
-    subscription_end_date TEXT,
-    created_at TEXT NOT NULL,
-    text_requests_count INTEGER DEFAULT 0,
-    photo_requests_count INTEGER DEFAULT 0,
-    last_request_date TEXT,
-    openai_thread_id TEXT
-)
+        user_id INTEGER PRIMARY KEY,
+        full_name TEXT,
+        username TEXT,
+        language_code TEXT,
+        is_premium INTEGER DEFAULT 0,
+        subscription_end_date TEXT,
+        created_at TEXT NOT NULL,
+        text_requests_count INTEGER DEFAULT 0,
+        photo_requests_count INTEGER DEFAULT 0,
+        last_request_date TEXT,
+        openai_thread_id TEXT
+    )
     ''')
     conn.commit()
+
+    # Екінші, кесте жасалғаннан кейін миграцияны іске қосамыз
+    _run_migrations(conn)
+
     conn.close()
 
 def add_or_update_user(user_id, full_name, username, language_code):
@@ -46,11 +79,12 @@ def add_or_update_user(user_id, full_name, username, language_code):
         current_time = datetime.now().isoformat()
 
         if existing_user:
+            # Тілді тек қолданушының өзі ауыстыруы үшін, бұл жерде жаңартпаймыз
             cursor.execute('''
             UPDATE users
-            SET full_name = ?, username = ?, language_code = ?
+            SET full_name = ?, username = ?
             WHERE user_id = ?
-            ''', (full_name, username, language_code, user_id))
+            ''', (full_name, username, user_id))
         else:
             cursor.execute('''
             INSERT INTO users (user_id, full_name, username, language_code, created_at)
@@ -92,6 +126,7 @@ def get_all_user_ids():
     except Exception as e:
         logger.error(f"Барлық қолданушы ID-ларын алу кезінде қате: {e}")
         return []
+
 def is_user_premium(user_id: int) -> bool:
     """Қолданушының жарамды премиум жазылымы бар-жоғын тексереді."""
     try:
@@ -110,16 +145,14 @@ def is_user_premium(user_id: int) -> bool:
         if not is_premium or not end_date_str:
             return False
             
-        # Жазылымның аяқталу күнін бүгінгі күнмен салыстыру
         end_date = datetime.fromisoformat(end_date_str)
         if end_date > datetime.now():
-            return True # Жазылым жарамды
+            return True
             
     except Exception as e:
         logger.error(f"Премиум статусын тексеру кезінде қате (user_id: {user_id}): {e}")
-        return False
-        
-    return False # Жазылым мерзімі өтіп кеткен немесе басқа қате
+    return False
+
 def grant_premium_access(user_id: int, days: int):
     """Қолданушыға белгілі бір күнге премиум жазылым береді."""
     end_date = datetime.now() + timedelta(days=days)
@@ -150,6 +183,7 @@ def revoke_premium_access(user_id: int):
         logger.info(f"{user_id} қолданушысының премиум жазылымы тоқтатылды.")
     except Exception as e:
         logger.error(f"Премиумды тоқтату кезінде қате (user_id: {user_id}): {e}")
+
 def update_user_language(user_id: int, lang_code: str):
     """Қолданушының тіл кодын дерекқорда жаңартады."""
     try:
@@ -210,6 +244,7 @@ def increment_request_count(user_id: int, request_type: str):
         conn.close()
     except Exception as e:
         logger.error(f"Сұраныс санын арттыруда қате: {e}")
+
 def get_user_language(user_id: int) -> str:
     """Қолданушының сақталған тіл кодын қайтарады."""
     try:
@@ -218,7 +253,6 @@ def get_user_language(user_id: int) -> str:
         cursor.execute("SELECT language_code FROM users WHERE user_id = ?", (user_id,))
         result = cursor.fetchone()
         conn.close()
-        # Егер тіл табылса, соны, болмаса әдепкі 'kk' тілін қайтарамыз
         return result[0] if result and result[0] else 'kk'
     except Exception:
         return 'kk'
@@ -246,62 +280,6 @@ def get_thread_id(user_id: int) -> str | None:
     except Exception as e:
         logger.error(f"Thread ID алуда қате: {e}")
         return None
-def set_thread_id(user_id: int, thread_id: str | None):
-    """Қолданушының OpenAI thread_id-ын сақтайды немесе тазалайды."""
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("UPDATE users SET openai_thread_id = ? WHERE user_id = ?", (thread_id, user_id))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        logger.error(f"Thread ID сақтауда қате: {e}")
 
-def get_thread_id(user_id: int) -> str | None:
-    """Қолданушының OpenAI thread_id-ын дерекқордан алады."""
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("SELECT openai_thread_id FROM users WHERE user_id = ?", (user_id,))
-        result = cursor.fetchone()
-        conn.close()
-        return result[0] if result else None
-    except Exception as e:
-        logger.error(f"Thread ID алуда қате: {e}")
-        return None        
-def _run_migrations(conn):
-    """Дерекқор кестесіне жетіспейтін бағандарды қосады."""
-    cursor = conn.cursor()
-
-    # 'users' кестесінің ағымдағы бағандарын тексеру
-    cursor.execute("PRAGMA table_info(users)")
-    columns = [info[1] for info in cursor.fetchall()]
-
-    # Жетіспейтін бағандарды қосу
-    if 'text_requests_count' not in columns:
-        cursor.execute("ALTER TABLE users ADD COLUMN text_requests_count INTEGER DEFAULT 0")
-        logger.info("`text_requests_count` бағаны қосылды.")
-
-    if 'photo_requests_count' not in columns:
-        cursor.execute("ALTER TABLE users ADD COLUMN photo_requests_count INTEGER DEFAULT 0")
-        logger.info("`photo_requests_count` бағаны қосылды.")
-
-    if 'last_request_date' not in columns:
-        cursor.execute("ALTER TABLE users ADD COLUMN last_request_date TEXT")
-        logger.info("`last_request_date` бағаны қосылды.")
-
-    if 'openai_thread_id' not in columns:
-        cursor.execute("ALTER TABLE users ADD COLUMN openai_thread_id TEXT")
-        logger.info("`openai_thread_id` бағаны қосылды.")
-
-    conn.commit()
-def init_db():
-    """Дерекқорды және 'users' кестесін жасайды (егер олар жоқ болса)."""
-    os.makedirs(DATA_DIR, exist_ok=True)
-    conn = sqlite3.connect(DB_FILE)
-
-    _run_migrations(conn) # МИГРАЦИЯНЫ ОСЫ ЖЕРДЕ ІСКЕ ҚОСАМЫЗ
-
-    cursor = conn.cursor()
 # Ең бірінші рет импортталғанда дерекқорды дайындау
 init_db()
