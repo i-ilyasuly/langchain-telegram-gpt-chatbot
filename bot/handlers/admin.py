@@ -111,17 +111,28 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await feedback_button_callback(update, context)
     elif query.data.startswith('set_lang_'):
         new_lang_code = query.data.split('_')[-1] # 'kk' немесе 'ru' бөлігін алады
+        if new_lang_code == 'start': # Егер соңында '_start' болса, кесіп тастаймыз
+            new_lang_code = query.data.split('_')[-2]
+
         update_user_language(user.id, new_lang_code)
         
-        # Жаңа тілдегі жауапты алу үшін get_text функциясын жаңа lang_code-пен шақырамыз
-        confirmation_text = get_text('language_changed_success', new_lang_code)
-        
+        confirmation_text = get_text(f'language_set_{new_lang_code}', new_lang_code)
         await query.answer()
         await query.edit_message_text(confirmation_text)
 
-    elif query.data == 'feedback_stats':
-        if user.id in ADMIN_USER_IDS:
-            await feedback_stats(update, context)
+        # Егер тіл /start-тан кейін таңдалса, негізгі менюді көрсетеміз
+        if query.data.endswith('_start'):
+            keyboard = [
+                [InlineKeyboardButton(get_text('ask_text_button', new_lang_code), callback_data='ask_text')],
+                [InlineKeyboardButton(get_text('ask_photo_button', new_lang_code), callback_data='ask_photo')],
+            ]
+            if user.id in ADMIN_USER_IDS:
+                keyboard.append([InlineKeyboardButton(get_text('admin_panel_button', new_lang_code), callback_data='admin_panel')])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            welcome_text = get_text('welcome_message', new_lang_code)
+            await query.message.reply_text(welcome_text, reply_markup=reply_markup)
+    
 
 async def grant_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user

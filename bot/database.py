@@ -15,10 +15,8 @@ DB_FILE = os.path.join(DATA_DIR, "bot_users.db")
 def init_db():
     """Дерекқорды және 'users' кестесін жасайды (егер олар жоқ болса)."""
     os.makedirs(DATA_DIR, exist_ok=True)
-
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY,
@@ -27,10 +25,12 @@ def init_db():
         language_code TEXT,
         is_premium INTEGER DEFAULT 0,
         subscription_end_date TEXT,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        text_requests_count INTEGER DEFAULT 0,
+        photo_requests_count INTEGER DEFAULT 0,
+        last_request_date TEXT
     )
     ''')
-
     conn.commit()
     conn.close()
 
@@ -165,5 +165,50 @@ def update_user_language(user_id: int, lang_code: str):
     except Exception as e:
         logger.error(f"Тілді жаңарту кезінде қате (user_id: {user_id}): {e}")
        
+def get_user_usage(user_id: int):
+    """Қолданушының сұраныс санын және соңғы сұраныс күнін қайтарады."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT text_requests_count, photo_requests_count, last_request_date FROM users WHERE user_id = ?",
+            (user_id,)
+        )
+        usage = cursor.fetchone()
+        conn.close()
+        return usage if usage else (0, 0, None)
+    except Exception as e:
+        logger.error(f"Қолданушының сұраныс санын алуда қате: {e}")
+        return (0, 0, None)
+
+def reset_user_limits(user_id: int):
+    """Қолданушының лимиттерін жаңартады (күн ауысқанда)."""
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE users SET text_requests_count = 0, photo_requests_count = 0, last_request_date = ? WHERE user_id = ?",
+            (today_str, user_id)
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Қолданушы лимитін жаңартуда қате: {e}")
+
+def increment_request_count(user_id: int, request_type: str):
+    """Сұраныс санауышын біреуге арттырады ('text' немесе 'photo')."""
+    field_to_update = "text_requests_count" if request_type == "text" else "photo_requests_count"
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute(
+            f"UPDATE users SET {field_to_update} = {field_to_update} + 1 WHERE user_id = ?",
+            (user_id,)
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Сұраныс санын арттыруда қате: {e}")
 # Ең бірінші рет импортталғанда дерекқорды дайындау
 init_db()
