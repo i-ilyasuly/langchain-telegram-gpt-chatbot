@@ -10,6 +10,7 @@ from google.cloud import vision
 from datetime import datetime
 from bot.config import ADMIN_USER_IDS, WAITING_MESSAGES, FREE_TEXT_LIMIT, FREE_PHOTO_LIMIT
 from bot.database import add_or_update_user, is_user_premium, get_user_usage, reset_user_limits, increment_request_count
+from bot.database import get_user_language
 
 # --- Импорттарды реттеу ---
 # Конфигурация, утилиталар және базадан қажетті функцияларды бір жерге жинау
@@ -79,7 +80,7 @@ async def check_user_limits(user: dict, request_type: str, lang_code: str) -> st
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Кіріс мәтіндік хабарламаларды өңдейді."""
     user = update.effective_user
-    lang_code = user.language_code
+    lang_code = get_user_language(user.id)
 
     # --- Лимит тексерісі ---
     limit_error = await check_user_limits(user, 'text', lang_code)
@@ -102,7 +103,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     language_instruction = get_language_instruction(lang_code)
     user_query_for_ai = language_instruction + user_query_original
-    waiting_message = await update.message.reply_text(random.choice(WAITING_MESSAGES))
+    waiting_message = await update.message.reply_text(random.choice(get_text('waiting_messages', lang_code)))
     
     try:
         thread_id = context.user_data.get('thread_id')
@@ -152,7 +153,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Кіріс суреттерді өңдейді."""
     user = update.effective_user
-    lang_code = user.language_code
+    lang_code = get_user_language(user.id)
 
     # --- Лимит тексерісі ---
     limit_error = await check_user_limits(user, 'photo', lang_code)
@@ -170,7 +171,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"User {user.id} ({user.full_name}) sent a photo.")
     keyboard = [[InlineKeyboardButton("👍", callback_data='like'), InlineKeyboardButton("👎", callback_data='dislike')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    waiting_message = await update.message.reply_text(random.choice(WAITING_MESSAGES))
+    waiting_message = await update.message.reply_text(random.choice(get_text('waiting_messages', lang_code)))
     
     try:
         photo_file = await update.message.photo[-1].get_file()
@@ -186,11 +187,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         language_instruction = get_language_instruction(lang_code)
         final_query_to_openai = (
-            f"{language_instruction} "
-            f"Пайдаланушы маған сурет жіберді. Google Vision суреттен мынадай мәтінді оқыды: '{image_description}'.\n\n"
-            "Осы мәтіндегі негізгі атауларды анықтап, сол бойынша өзіңнің білім қорыңнан ақпаратты ізде. "
-            "Табылған ақпарат негізінде, суреттегі өнімнің халал статусы туралы толық жауап бер."
-        )
+    f"{language_instruction} "
+    f"Пайдаланушы маған сурет жіберді. Google Vision суреттен мынадай мәтінді оқыды: '{image_description}'.\n\n"
+    "Осы мәтіндегі негізгі атауларды анықтап, сол бойынша өзіңнің білім қорыңнан ақпаратты ізде. "
+    "Табылған ақпарат негізінде, суреттегі өнімнің халал статусы туралы толық жауап бер. "
+    "Маңызды ереже: Ешқашан сілтемелерді ойдан құрастырма және bit.ly сияқты сервистермен қысқартпа. Тек білім қорында бар нақты, толық сілтемені ғана бер."
+)
         
         thread_id = context.user_data.get('thread_id')
         response_text, new_thread_id, run = await run_openai_assistant(final_query_to_openai, thread_id)

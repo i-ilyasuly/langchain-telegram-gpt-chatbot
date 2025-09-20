@@ -6,6 +6,7 @@ import asyncio
 import csv
 from datetime import datetime
 from bot.database import get_user_count, grant_premium_access, revoke_premium_access, update_user_language
+from bot.database import get_user_language
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -82,7 +83,8 @@ async def feedback_button_callback(update: Update, context: ContextTypes.DEFAULT
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user = query.from_user
-    lang_code = user.language_code
+    user = update.effective_user
+    lang_code = get_user_language(user.id)
     
     if query.data in ['ask_text', 'ask_photo', 'admin_panel']:
         await query.answer()

@@ -107,7 +107,8 @@ broadcast_conv_handler = ConversationHandler(
         BROADCAST_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_message_handler)]
     },
     fallbacks=[CommandHandler('cancel', cancel_broadcast)],
-    per_user=True
+    per_user=True,
+    conversation_timeout=20  # 20 секундтан кейін автоматты түрде тоқтайды
 )
 
 update_db_conv_handler = ConversationHandler(

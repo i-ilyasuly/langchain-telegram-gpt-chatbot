@@ -210,5 +210,18 @@ def increment_request_count(user_id: int, request_type: str):
         conn.close()
     except Exception as e:
         logger.error(f"Сұраныс санын арттыруда қате: {e}")
+def get_user_language(user_id: int) -> str:
+    """Қолданушының сақталған тіл кодын қайтарады."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT language_code FROM users WHERE user_id = ?", (user_id,))
+        result = cursor.fetchone()
+        conn.close()
+        # Егер тіл табылса, соны, болмаса әдепкі 'kk' тілін қайтарамыз
+        return result[0] if result and result[0] else 'kk'
+    except Exception:
+        return 'kk'
+    
 # Ең бірінші рет импортталғанда дерекқорды дайындау
 init_db()
