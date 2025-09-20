@@ -80,60 +80,100 @@ async def feedback_button_callback(update: Update, context: ContextTypes.DEFAULT
         writer.writerow({'timestamp': timestamp, 'user_id': user_id, 'question': question, 'bot_answer': bot_answer, 'vote': vote})
     logger.info(f"Кері байланыс сақталды: User {user_id} '{vote}' деп басты.")
 
+def get_main_menu(lang_code: str, user_id: int) -> InlineKeyboardMarkup:
+    """Негізгі мәзірдің пернетақтасын жасайды."""
+    keyboard = [
+        [InlineKeyboardButton(get_text('features_button', lang_code), callback_data='show_features')],
+        [InlineKeyboardButton(get_text('settings_button', lang_code), callback_data='settings')],
+    ]
+    if user_id in ADMIN_USER_IDS:
+        keyboard.append([InlineKeyboardButton(get_text('admin_panel_button', lang_code), callback_data='admin_panel')])
+    return InlineKeyboardMarkup(keyboard)
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    await query.answer()
+    
     user = query.from_user
-    user = update.effective_user
     lang_code = get_user_language(user.id)
-    
-    if query.data in ['ask_text', 'ask_photo', 'admin_panel']:
-        await query.answer()
-    
-    if query.data == 'ask_text':
-        await query.message.reply_text(get_text('ask_text_prompt', lang_code))
-    elif query.data == 'ask_photo':
-        await query.message.reply_text(get_text('ask_photo_prompt', lang_code))
+
+    # Негізгі мәзірге оралу
+    if query.data == 'back_to_main':
+        reply_markup = get_main_menu(lang_code, user.id)
+        await query.edit_message_text(get_text('main_menu_title', lang_code), reply_markup=reply_markup)
+        return
+
+    # Тілді ауыстыру
+    elif query.data.startswith('set_lang_'):
+        new_lang_code = query.data.split('_')[-1]
+        if new_lang_code == 'start':
+            new_lang_code = query.data.split('_')[-2]
+
+        update_user_language(user.id, new_lang_code)
+        confirmation_text = get_text(f'language_set_{new_lang_code}', new_lang_code)
+        await query.edit_message_text(confirmation_text)
+
+        reply_markup = get_main_menu(new_lang_code, user.id)
+        await query.message.reply_text(get_text('main_menu_title', new_lang_code), reply_markup=reply_markup)
+        return
+
+    # Баптаулар мәзірі
+    elif query.data == 'settings':
+        keyboard = [
+            [InlineKeyboardButton(get_text('change_language_button', lang_code), callback_data='change_language')],
+            [InlineKeyboardButton(get_text('contact_admin_button', lang_code), callback_data='contact_admin')],
+            [InlineKeyboardButton(get_text('back_button', lang_code), callback_data='back_to_main')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(get_text('settings_title', lang_code), reply_markup=reply_markup)
+
+    # Тілді өзгерту батырмасы (баптаулар ішінде)
+    elif query.data == 'change_language':
+        keyboard = [
+            [InlineKeyboardButton("🇰🇿 Қазақша", callback_data='set_lang_kk')],
+            [InlineKeyboardButton("🇷🇺 Русский", callback_data='set_lang_ru')],
+            [InlineKeyboardButton(get_text('back_button', lang_code), callback_data='settings')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(get_text('change_language_button', lang_code), reply_markup=reply_markup)
+
+    # Админмен байланыс
+    elif query.data == 'contact_admin':
+        await query.edit_message_text(
+            get_text('contact_admin_text', lang_code),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_text('back_button', lang_code), callback_data='settings')]])
+        )
+
+    # Бот мүмкіндіктері
+    elif query.data == 'show_features':
+        await query.edit_message_text(
+            get_text('bot_features_text', lang_code),
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_text('back_button', lang_code), callback_data='back_to_main')]])
+        )
+
+    # -- Админ панелінің ескі логикасы --
     elif query.data == 'admin_panel':
         if user.id in ADMIN_USER_IDS:
             admin_keyboard = [
                 [InlineKeyboardButton(get_text('stats_button', lang_code), callback_data='feedback_stats')],
                 [InlineKeyboardButton(get_text('suspicious_list_button', lang_code), callback_data='suspicious_list')],
                 [InlineKeyboardButton(get_text('broadcast_button', lang_code), callback_data='broadcast_start')],
-                [InlineKeyboardButton(get_text('update_db_button', lang_code), callback_data='update_db_placeholder')]
+                [InlineKeyboardButton(get_text('update_db_button', lang_code), callback_data='update_db_placeholder')],
+                [InlineKeyboardButton(get_text('back_button', lang_code), callback_data='back_to_main')]
             ]
             reply_markup = InlineKeyboardMarkup(admin_keyboard)
-            await query.message.reply_text(get_text('admin_panel_title', lang_code), reply_markup=reply_markup)
+            await query.edit_message_text(get_text('admin_panel_title', lang_code), reply_markup=reply_markup)
+    
     elif query.data == 'feedback_stats':
-        if user.id in ADMIN_USER_IDS:
-            await feedback_stats(update, context)
+        if user.id in ADMIN_USER_IDS: await feedback_stats(update, context)
+    
     elif query.data == 'suspicious_list':
-        if user.id in ADMIN_USER_IDS:
-            await suspicious_list(update, context)
+        if user.id in ADMIN_USER_IDS: await suspicious_list(update, context)
+
+    # Лайк/Дизлайк
     elif query.data in ['like', 'dislike']:
         await feedback_button_callback(update, context)
-    elif query.data.startswith('set_lang_'):
-        new_lang_code = query.data.split('_')[-1] # 'kk' немесе 'ru' бөлігін алады
-        if new_lang_code == 'start': # Егер соңында '_start' болса, кесіп тастаймыз
-            new_lang_code = query.data.split('_')[-2]
-
-        update_user_language(user.id, new_lang_code)
-        
-        confirmation_text = get_text(f'language_set_{new_lang_code}', new_lang_code)
-        await query.answer()
-        await query.edit_message_text(confirmation_text)
-
-        # Егер тіл /start-тан кейін таңдалса, негізгі менюді көрсетеміз
-        if query.data.endswith('_start'):
-            keyboard = [
-                [InlineKeyboardButton(get_text('ask_text_button', new_lang_code), callback_data='ask_text')],
-                [InlineKeyboardButton(get_text('ask_photo_button', new_lang_code), callback_data='ask_photo')],
-            ]
-            if user.id in ADMIN_USER_IDS:
-                keyboard.append([InlineKeyboardButton(get_text('admin_panel_button', new_lang_code), callback_data='admin_panel')])
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            welcome_text = get_text('welcome_message', new_lang_code)
-            await query.message.reply_text(welcome_text, reply_markup=reply_markup)
     
 
 async def grant_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
