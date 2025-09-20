@@ -46,7 +46,7 @@ async def premium_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "✅ Шектеусіз мәтіндік сұраныстар\n"
         "✅ Сурет арқылы өнімді талдау мүмкіндігі\n"
         "✅ Жауап алу кезегінде бірінші орын\n\n"
-        "Жазылымды сатып алу үшін админге хабарласыңыз: @ilyasuly" # Өз админ username-іңізді жазыңыз
+        "Жазылымды сатып алу үшін админге хабарласыңыз: @i.lyasuly" # Өз админ username-іңізді жазыңыз
     )
     await update.message.reply_text(premium_text, parse_mode='Markdown')
 
