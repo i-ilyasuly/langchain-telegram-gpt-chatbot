@@ -4,19 +4,24 @@ import logging
 import re
 import random
 import asyncio
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from google.cloud import vision
-from datetime import datetime
-from bot.config import ADMIN_USER_IDS, FREE_TEXT_LIMIT, FREE_PHOTO_LIMIT
-from bot.database import add_or_update_user, is_user_premium, get_user_usage, reset_user_limits, increment_request_count
-from bot.database import get_user_language
 
-# --- Импорттарды реттеу ---
-# Конфигурация, утилиталар және базадан қажетті функцияларды бір жерге жинау
-from bot.config import ADMIN_USER_IDS
+# --- Жобаның ішкі импорттары (тазартылған нұсқа) ---
+from bot.config import ADMIN_USER_IDS, FREE_TEXT_LIMIT, FREE_PHOTO_LIMIT
 from bot.utils import get_text, get_language_instruction, run_openai_assistant, client_openai
-from bot.database import add_or_update_user, is_user_premium
+from bot.database import (
+    add_or_update_user,
+    is_user_premium,
+    get_user_usage,
+    reset_user_limits,
+    increment_request_count,
+    get_user_language,
+    set_thread_id,
+    get_thread_id
+)
 
 # --- Негізгі баптаулар ---
 logger = logging.getLogger(__name__)
@@ -29,7 +34,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/start командасын өңдейді, алдымен тілді таңдауды сұрайды."""
     user = update.effective_user
     add_or_update_user(user.id, user.full_name, user.username, user.language_code)
-    context.user_data.pop('thread_id', None)
+    set_thread_id(user.id, None)  # Сұхбатты дерекқорда тазалаймыз
     
     keyboard = [
         [InlineKeyboardButton("🇰🇿 Қазақша", callback_data='set_lang_kk_start')],
@@ -41,19 +46,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def premium_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/premium командасын өңдейді, жазылым туралы ақпарат береді."""
-    premium_text = (
-        "👑 *Premium Жазылым Артықшылықтары*\n\n"
-        "✅ Шектеусіз мәтіндік сұраныстар\n"
-        "✅ Сурет арқылы өнімді талдау мүмкіндігі\n"
-        "✅ Жауап алу кезегінде бірінші орын\n\n"
-        "Жазылымды сатып алу үшін админге хабарласыңыз: @i.lyasuly" # Өз админ username-іңізді жазыңыз
-    )
+    user = update.effective_user
+    lang_code = get_user_language(user.id)
+    premium_text = get_text('premium_info_text', lang_code)
     await update.message.reply_text(premium_text, parse_mode='Markdown')
+
 
 async def check_user_limits(user: dict, request_type: str, lang_code: str) -> str | None:
     """Қолданушының лимиттерін тексереді және қажет болса жаңартады."""
     if is_user_premium(user.id) or user.id in ADMIN_USER_IDS:
-        return None # Премиум немесе админ болса, шектеу жоқ
+        return None
 
     text_count, photo_count, last_date = get_user_usage(user.id)
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -73,16 +75,15 @@ async def check_user_limits(user: dict, request_type: str, lang_code: str) -> st
     if limit_message:
         return limit_message + "\n" + get_text('limit_reset_info', lang_code)
     
-    # Лимит жетпесе, санауышты арттырамыз
     increment_request_count(user.id, request_type)
     return None
+
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Кіріс мәтіндік хабарламаларды өңдейді."""
     user = update.effective_user
     lang_code = get_user_language(user.id)
 
-    # --- Лимит тексерісі ---
     limit_error = await check_user_limits(user, 'text', lang_code)
     if limit_error:
         await update.message.reply_text(limit_error)
@@ -98,12 +99,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     waiting_message = await update.message.reply_text(random.choice(get_text('waiting_messages', lang_code)))
     
     try:
-        thread_id = context.user_data.get('thread_id')
+        # Дұрыс: thread_id дерекқордан алынады
+        thread_id = get_thread_id(user.id)
         response_text, new_thread_id, run = await run_openai_assistant(user_query_for_ai, thread_id)
+        
         if run is None:
              await waiting_message.edit_text(response_text)
              return
-        context.user_data['thread_id'] = new_thread_id
+        
+        # Дұрыс: жаңа thread_id дерекқорға сақталады
+        set_thread_id(user.id, new_thread_id)
         
         while run.status in ['in_progress', 'queued']:
             await asyncio.sleep(2)
@@ -118,15 +123,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data[f'last_question_{waiting_message.message_id}'] = user_query_original
             context.user_data[f'last_answer_{waiting_message.message_id}'] = cleaned_response
         else:
-            # Егер OpenAI Assistant-тың жұмысы 'completed' статусымен аяқталмаса
             error_message = "Белгісіз қате"
             if run.last_error:
                 error_message = run.last_error.message
-            
-            # Қатені журналға (логқа) толық жазамыз
             logger.error(f"OpenAI Assistant жұмысы аяқталмады, статусы: {run.status}, қате: {error_message}")
-            
-            # Қолданушыға түсінікті хабарлама береміз
             user_friendly_error = (
                 "Кешіріңіз, жауапты өңдеу кезінде қате пайда болды.\n\n"
                 f"Техникалық ақпарат: `{run.status}`"
@@ -134,7 +134,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await waiting_message.edit_text(user_friendly_error, parse_mode='Markdown')
 
     except Exception as e:
-        # Бұл блок енді тек күтпеген қателерді (мысалы, интернет байланысының үзілуі, кодтағы басқа қателер) ұстайды
         logger.error(f"Хабарламаны өңдеу кезінде күтпеген қате (User ID: {user.id}): {e}", exc_info=True)
         await waiting_message.edit_text(
             "Кешіріңіз, күтпеген техникалық ақау пайда болды. "
@@ -147,7 +146,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     lang_code = get_user_language(user.id)
 
-    # --- Лимит тексерісі ---
     limit_error = await check_user_limits(user, 'photo', lang_code)
     if limit_error:
         await update.message.reply_text(limit_error)
@@ -172,19 +170,23 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         language_instruction = get_language_instruction(lang_code)
         final_query_to_openai = (
-    f"{language_instruction} "
-    f"Пайдаланушы маған сурет жіберді. Google Vision суреттен мынадай мәтінді оқыды: '{image_description}'.\n\n"
-    "Осы мәтіндегі негізгі атауларды анықтап, сол бойынша өзіңнің білім қорыңнан ақпаратты ізде. "
-    "Табылған ақпарат негізінде, суреттегі өнімнің халал статусы туралы толық жауап бер. "
-    "Маңызды ереже: Ешқашан сілтемелерді ойдан құрастырма және bit.ly сияқты сервистермен қысқартпа. Тек білім қорында бар нақты, толық сілтемені ғана бер."
-)
+            f"{language_instruction} "
+            f"Пайдаланушы маған сурет жіберді. Google Vision суреттен мынадай мәтінді оқыды: '{image_description}'.\n\n"
+            "Осы мәтіндегі негізгі атауларды анықтап, сол бойынша өзіңнің білім қорыңнан ақпаратты ізде. "
+            "Табылған ақпарат негізінде, суреттегі өнімнің халал статусы туралы толық жауап бер. "
+            "Маңызды ереже: Ешқашан сілтемелерді ойдан құрастырма және bit.ly сияқты сервистермен қысқартпа. Тек білім қорында бар нақты, толық сілтемені ғана бер."
+        )
         
-        thread_id = context.user_data.get('thread_id')
+        # Дұрыс: thread_id дерекқордан алынады
+        thread_id = get_thread_id(user.id)
         response_text, new_thread_id, run = await run_openai_assistant(final_query_to_openai, thread_id)
+        
         if run is None:
             await waiting_message.edit_text(response_text)
             return
-        context.user_data['thread_id'] = new_thread_id
+            
+        # Дұрыс: жаңа thread_id дерекқорға сақталады
+        set_thread_id(user.id, new_thread_id)
         
         while run.status in ['in_progress', 'queued']:
             await asyncio.sleep(2)
@@ -200,9 +202,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             error_message = run.last_error.message if run.last_error else 'Белгісіз қате'
             await waiting_message.edit_text(f"Ассистент жұмысында қате: {error_message}")
+            
     except Exception as e:
         logger.error(f"Суретті өңдеу қатесі (User ID: {user.id}): {e}")
         await waiting_message.edit_text("Суретті өңдеу кезінде қате шықты.")
+
 
 async def language_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/language командасын өңдейді, тіл таңдау батырмаларын жібереді."""

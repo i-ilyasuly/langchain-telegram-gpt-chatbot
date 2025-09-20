@@ -1,4 +1,3 @@
-# database.py
 
 import sqlite3
 import os
@@ -19,17 +18,18 @@ def init_db():
     cursor = conn.cursor()
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY,
-        full_name TEXT,
-        username TEXT,
-        language_code TEXT,
-        is_premium INTEGER DEFAULT 0,
-        subscription_end_date TEXT,
-        created_at TEXT NOT NULL,
-        text_requests_count INTEGER DEFAULT 0,
-        photo_requests_count INTEGER DEFAULT 0,
-        last_request_date TEXT
-    )
+    user_id INTEGER PRIMARY KEY,
+    full_name TEXT,
+    username TEXT,
+    language_code TEXT,
+    is_premium INTEGER DEFAULT 0,
+    subscription_end_date TEXT,
+    created_at TEXT NOT NULL,
+    text_requests_count INTEGER DEFAULT 0,
+    photo_requests_count INTEGER DEFAULT 0,
+    last_request_date TEXT,
+    openai_thread_id TEXT
+)
     ''')
     conn.commit()
     conn.close()
@@ -223,5 +223,85 @@ def get_user_language(user_id: int) -> str:
     except Exception:
         return 'kk'
     
+def set_thread_id(user_id: int, thread_id: str | None):
+    """Қолданушының OpenAI thread_id-ын сақтайды немесе тазалайды."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET openai_thread_id = ? WHERE user_id = ?", (thread_id, user_id))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Thread ID сақтауда қате: {e}")
+
+def get_thread_id(user_id: int) -> str | None:
+    """Қолданушының OpenAI thread_id-ын дерекқордан алады."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT openai_thread_id FROM users WHERE user_id = ?", (user_id,))
+        result = cursor.fetchone()
+        conn.close()
+        return result[0] if result else None
+    except Exception as e:
+        logger.error(f"Thread ID алуда қате: {e}")
+        return None
+def set_thread_id(user_id: int, thread_id: str | None):
+    """Қолданушының OpenAI thread_id-ын сақтайды немесе тазалайды."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET openai_thread_id = ? WHERE user_id = ?", (thread_id, user_id))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Thread ID сақтауда қате: {e}")
+
+def get_thread_id(user_id: int) -> str | None:
+    """Қолданушының OpenAI thread_id-ын дерекқордан алады."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT openai_thread_id FROM users WHERE user_id = ?", (user_id,))
+        result = cursor.fetchone()
+        conn.close()
+        return result[0] if result else None
+    except Exception as e:
+        logger.error(f"Thread ID алуда қате: {e}")
+        return None        
+def _run_migrations(conn):
+    """Дерекқор кестесіне жетіспейтін бағандарды қосады."""
+    cursor = conn.cursor()
+
+    # 'users' кестесінің ағымдағы бағандарын тексеру
+    cursor.execute("PRAGMA table_info(users)")
+    columns = [info[1] for info in cursor.fetchall()]
+
+    # Жетіспейтін бағандарды қосу
+    if 'text_requests_count' not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN text_requests_count INTEGER DEFAULT 0")
+        logger.info("`text_requests_count` бағаны қосылды.")
+
+    if 'photo_requests_count' not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN photo_requests_count INTEGER DEFAULT 0")
+        logger.info("`photo_requests_count` бағаны қосылды.")
+
+    if 'last_request_date' not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN last_request_date TEXT")
+        logger.info("`last_request_date` бағаны қосылды.")
+
+    if 'openai_thread_id' not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN openai_thread_id TEXT")
+        logger.info("`openai_thread_id` бағаны қосылды.")
+
+    conn.commit()
+def init_db():
+    """Дерекқорды және 'users' кестесін жасайды (егер олар жоқ болса)."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    conn = sqlite3.connect(DB_FILE)
+
+    _run_migrations(conn) # МИГРАЦИЯНЫ ОСЫ ЖЕРДЕ ІСКЕ ҚОСАМЫЗ
+
+    cursor = conn.cursor()
 # Ең бірінші рет импортталғанда дерекқорды дайындау
 init_db()
