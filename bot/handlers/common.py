@@ -88,14 +88,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(limit_error)
         return
     
-    # --- Премиум тексерісі ---
-    if not is_user_premium(user.id) and user.id not in ADMIN_USER_IDS:
-        await update.message.reply_text(
-            "❗ Бұл функция тек Premium жазылушылар үшін қолжетімді.\n\n"
-            "Жазылым туралы ақпарат алу үшін /premium командасын теріңіз."
-        )
-        return
-
     user_query_original = update.message.text.strip()
     logger.info(f"User {user.id} ({user.full_name}) sent text: '{user_query_original}'")
 
@@ -159,13 +151,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     limit_error = await check_user_limits(user, 'photo', lang_code)
     if limit_error:
         await update.message.reply_text(limit_error)
-        return
-    # --- Премиум тексерісі ---
-    if not is_user_premium(user.id) and user.id not in ADMIN_USER_IDS:
-        await update.message.reply_text(
-            "❗ Суретпен талдау функциясы тек Premium жазылушылар үшін қолжетімді.\n\n"
-            "Жазылым туралы ақпарат алу үшін /premium командасын теріңіз."
-        )
         return
 
     logger.info(f"User {user.id} ({user.full_name}) sent a photo.")
