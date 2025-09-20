@@ -8,13 +8,13 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from google.cloud import vision
 from datetime import datetime
-from bot.config import ADMIN_USER_IDS, WAITING_MESSAGES, FREE_TEXT_LIMIT, FREE_PHOTO_LIMIT
+from bot.config import ADMIN_USER_IDS, FREE_TEXT_LIMIT, FREE_PHOTO_LIMIT
 from bot.database import add_or_update_user, is_user_premium, get_user_usage, reset_user_limits, increment_request_count
 from bot.database import get_user_language
 
 # --- Импорттарды реттеу ---
 # Конфигурация, утилиталар және базадан қажетті функцияларды бір жерге жинау
-from bot.config import ADMIN_USER_IDS, WAITING_MESSAGES
+from bot.config import ADMIN_USER_IDS
 from bot.utils import get_text, get_language_instruction, run_openai_assistant, client_openai
 from bot.database import add_or_update_user, is_user_premium
 
