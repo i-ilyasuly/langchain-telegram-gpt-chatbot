@@ -1,5 +1,3 @@
-# bot/database.py
-
 import sqlite3
 import os
 from datetime import datetime, timedelta
@@ -7,44 +5,35 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Render Disk-тегі ортақ директория (егер бар болса) немесе жергілікті директория
-DATA_DIR = os.getenv("RENDER_DISK_MOUNT_PATH", ".") # Render Disk болмаса, ағымдағы директорияны қолдану
+DATA_DIR = os.getenv("RENDER_DISK_MOUNT_PATH", ".")
 DB_FILE = os.path.join(DATA_DIR, "bot_users.db")
 
 def _run_migrations(conn):
     """Дерекқор кестесіне жетіспейтін бағандарды қосады."""
     cursor = conn.cursor()
-    
-    # 'users' кестесінің ағымдағы бағандарын тексеру
     cursor.execute("PRAGMA table_info(users)")
     columns = [info[1] for info in cursor.fetchall()]
 
-    # Жетіспейтін бағандарды қосу
-    if 'text_requests_count' not in columns:
-        cursor.execute("ALTER TABLE users ADD COLUMN text_requests_count INTEGER DEFAULT 0")
-        logger.info("`text_requests_count` бағаны қосылды.")
-    
-    if 'photo_requests_count' not in columns:
-        cursor.execute("ALTER TABLE users ADD COLUMN photo_requests_count INTEGER DEFAULT 0")
-        logger.info("`photo_requests_count` бағаны қосылды.")
-    
-    if 'last_request_date' not in columns:
-        cursor.execute("ALTER TABLE users ADD COLUMN last_request_date TEXT")
-        logger.info("`last_request_date` бағаны қосылды.")
+    new_columns = {
+        "text_requests_count": "INTEGER DEFAULT 0",
+        "photo_requests_count": "INTEGER DEFAULT 0",
+        "last_request_date": "TEXT",
+        "openai_thread_id": "TEXT",
+        "last_question": "TEXT",
+        "last_answer": "TEXT"
+    }
 
-    if 'openai_thread_id' not in columns:
-        cursor.execute("ALTER TABLE users ADD COLUMN openai_thread_id TEXT")
-        logger.info("`openai_thread_id` бағаны қосылды.")
-        
+    for col_name, col_type in new_columns.items():
+        if col_name not in columns:
+            cursor.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}")
+            logger.info(f"`{col_name}` бағаны қосылды.")
     conn.commit()
 
 def init_db():
-    """Дерекқорды және 'users' кестесін жасайды (егер олар жоқ болса)."""
+    """Дерекқорды және 'users' кестесін жасайды."""
     os.makedirs(DATA_DIR, exist_ok=True)
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-
-    # Бірінші, кесте жоқ болса жасаймыз.
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY,
@@ -53,18 +42,11 @@ def init_db():
         language_code TEXT,
         is_premium INTEGER DEFAULT 0,
         subscription_end_date TEXT,
-        created_at TEXT NOT NULL,
-        text_requests_count INTEGER DEFAULT 0,
-        photo_requests_count INTEGER DEFAULT 0,
-        last_request_date TEXT,
-        openai_thread_id TEXT
+        created_at TEXT NOT NULL
     )
     ''')
     conn.commit()
-
-    # Екінші, кесте жасалғаннан кейін миграцияны іске қосамыз
     _run_migrations(conn)
-
     conn.close()
 
 def add_or_update_user(user_id, full_name, username, language_code):
@@ -72,29 +54,89 @@ def add_or_update_user(user_id, full_name, username, language_code):
     try:
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
-
         cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
-        existing_user = cursor.fetchone()
-
-        current_time = datetime.now().isoformat()
-
-        if existing_user:
-            # Тілді тек қолданушының өзі ауыстыруы үшін, бұл жерде жаңартпаймыз
-            cursor.execute('''
-            UPDATE users
-            SET full_name = ?, username = ?
-            WHERE user_id = ?
-            ''', (full_name, username, user_id))
+        if cursor.fetchone():
+            cursor.execute("UPDATE users SET full_name = ?, username = ? WHERE user_id = ?", (full_name, username, user_id))
         else:
-            cursor.execute('''
-            INSERT INTO users (user_id, full_name, username, language_code, created_at)
-            VALUES (?, ?, ?, ?, ?)
-            ''', (user_id, full_name, username, language_code, current_time))
-
+            cursor.execute(
+                "INSERT INTO users (user_id, full_name, username, language_code, created_at) VALUES (?, ?, ?, ?, ?)",
+                (user_id, full_name, username, language_code, datetime.now().isoformat())
+            )
         conn.commit()
         conn.close()
     except Exception as e:
-        logger.error(f"Дерекқорда қолданушыны қосу/жаңарту кезінде қате: {e}")
+        logger.error(f"Қолданушыны қосу/жаңарту кезінде қате: {e}")
+
+def get_user_language(user_id: int) -> str:
+    """Қолданушының сақталған тіл кодын қайтарады."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT language_code FROM users WHERE user_id = ?", (user_id,))
+        result = cursor.fetchone()
+        conn.close()
+        return result[0] if result and result[0] else 'kk'
+    except Exception:
+        return 'kk'
+        
+def check_and_increment_usage(user_id: int, request_type: str, limit: int) -> bool:
+    """Лимитті тексереді және жетпесе, санауышты арттырады. Лимиттен асса, False қайтарады."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    try:
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        cursor.execute("SELECT text_requests_count, photo_requests_count, last_request_date FROM users WHERE user_id = ?", (user_id,))
+        usage = cursor.fetchone()
+
+        text_count, photo_count, last_date = usage if usage else (0, 0, None)
+
+        if last_date != today_str:
+            cursor.execute("UPDATE users SET text_requests_count = 0, photo_requests_count = 0, last_request_date = ? WHERE user_id = ?", (today_str, user_id))
+            text_count, photo_count = 0, 0
+
+        can_proceed = False
+        field_to_update = None
+        if request_type == 'text' and text_count < limit:
+            can_proceed = True
+            field_to_update = "text_requests_count"
+        elif request_type == 'photo' and photo_count < limit:
+            can_proceed = True
+            field_to_update = "photo_requests_count"
+
+        if can_proceed:
+            cursor.execute(f"UPDATE users SET {field_to_update} = {field_to_update} + 1 WHERE user_id = ?", (user_id,))
+        
+        conn.commit()
+        return can_proceed
+    except Exception as e:
+        logger.error(f"Лимитті тексеру/арттыру кезінде қате: {e}")
+        return False
+    finally:
+        conn.close()
+
+def set_last_q_and_a(user_id: int, question: str, answer: str):
+    """Қолданушының соңғы сұрағы мен жауабын дерекқорға сақтайды."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET last_question = ?, last_answer = ? WHERE user_id = ?", (question, answer, user_id))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Соңғы сұрақ-жауапты сақтауда қате: {e}")
+
+def get_last_q_and_a(user_id: int) -> tuple[str, str]:
+    """Қолданушының соңғы сұрағы мен жауабын дерекқордан алады."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT last_question, last_answer FROM users WHERE user_id = ?", (user_id,))
+        result = cursor.fetchone()
+        conn.close()
+        return result if result else ("Сұрақ табылмады", "Жауап табылмады")
+    except Exception as e:
+        logger.error(f"Соңғы сұрақ-жауапты алуда қате: {e}")
+        return ("Сұрақ табылмады", "Жауап табылмады")
 
 
 def get_user_count():

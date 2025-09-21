@@ -9,19 +9,18 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from google.cloud import vision
 
-# --- Жобаның ішкі импорттары (тазартылған нұсқа) ---
+# --- Жобаның ішкі импорттары ---
 from bot.config import ADMIN_USER_IDS, FREE_TEXT_LIMIT, FREE_PHOTO_LIMIT
-from bot.utils import get_text, get_language_instruction, run_openai_assistant, client_openai
+from bot.utils import get_text, get_language_instruction, run_openai_assistant
 from bot.database import (
-    add_or_update_user,
-    is_user_premium,
-    get_user_usage,
-    reset_user_limits,
-    increment_request_count,
-    get_user_language,
-    set_thread_id,
-    get_thread_id
+    add_or_update_user, is_user_premium, get_user_language,
+    set_thread_id, get_thread_id, set_last_q_and_a,
+    check_and_increment_usage
 )
+from openai import AsyncOpenAI
+from bot.config import OPENAI_API_KEY
+client_openai = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
 
 # --- Негізгі баптаулар ---
 logger = logging.getLogger(__name__)
@@ -57,25 +56,15 @@ async def check_user_limits(user: dict, request_type: str, lang_code: str) -> st
     if is_user_premium(user.id) or user.id in ADMIN_USER_IDS:
         return None
 
-    text_count, photo_count, last_date = get_user_usage(user.id)
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    # ТҮЗЕТІЛДІ: Лимиттерді тексеретін және санайтын сенімдірек логика
+    limit = FREE_TEXT_LIMIT if request_type == 'text' else FREE_PHOTO_LIMIT
+    can_proceed = check_and_increment_usage(user.id, request_type, limit)
 
-    if last_date != today_str:
-        reset_user_limits(user.id)
-        text_count, photo_count = 0, 0
-    
-    limit_message = None
-    if request_type == 'text':
-        if text_count >= FREE_TEXT_LIMIT:
-            limit_message = get_text('limit_reached_text', lang_code).format(limit=FREE_TEXT_LIMIT)
-    elif request_type == 'photo':
-        if photo_count >= FREE_PHOTO_LIMIT:
-            limit_message = get_text('limit_reached_photo', lang_code).format(limit=FREE_PHOTO_LIMIT)
-
-    if limit_message:
+    if not can_proceed:
+        key = 'limit_reached_text' if request_type == 'text' else 'limit_reached_photo'
+        limit_message = get_text(key, lang_code).format(limit=limit)
         return limit_message + "\n" + get_text('limit_reset_info', lang_code)
     
-    increment_request_count(user.id, request_type)
     return None
 
 
@@ -96,10 +85,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     language_instruction = get_language_instruction(lang_code)
     user_query_for_ai = language_instruction + user_query_original
-    waiting_message = await update.message.reply_text(random.choice(get_text('waiting_messages', lang_code)))
     
     try:
-        # Дұрыс: thread_id дерекқордан алынады
+        waiting_message = await update.message.reply_text(random.choice(get_text('waiting_messages', lang_code)))
+        
+        # ТҮЗЕТІЛДІ: thread_id дерекқордан алынады
         thread_id = get_thread_id(user.id)
         response_text, new_thread_id, run = await run_openai_assistant(user_query_for_ai, thread_id)
         
@@ -107,7 +97,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
              await waiting_message.edit_text(response_text)
              return
         
-        # Дұрыс: жаңа thread_id дерекқорға сақталады
+        # ТҮЗЕТІЛДІ: жаңа thread_id дерекқорға сақталады
         set_thread_id(user.id, new_thread_id)
         
         while run.status in ['in_progress', 'queued']:
@@ -118,27 +108,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             messages = await client_openai.beta.threads.messages.list(thread_id=new_thread_id, limit=1)
             final_response = messages.data[0].content[0].text.value
             cleaned_response = re.sub(r'【.*?†source】', '', final_response).strip()
-            logger.info(f"Bot response for user {user.id}: '{cleaned_response[:100]}...'")
             await waiting_message.edit_text(cleaned_response, reply_markup=reply_markup, parse_mode='Markdown')
-            context.user_data[f'last_question_{waiting_message.message_id}'] = user_query_original
-            context.user_data[f'last_answer_{waiting_message.message_id}'] = cleaned_response
+            
+            # ТҮЗЕТІЛДІ: Кері байланыс үшін дерекқорды қолдану
+            set_last_q_and_a(user.id, user_query_original, cleaned_response)
         else:
-            error_message = "Белгісіз қате"
-            if run.last_error:
-                error_message = run.last_error.message
-            logger.error(f"OpenAI Assistant жұмысы аяқталмады, статусы: {run.status}, қате: {error_message}")
-            user_friendly_error = (
-                "Кешіріңіз, жауапты өңдеу кезінде қате пайда болды.\n\n"
-                f"Техникалық ақпарат: `{run.status}`"
-            )
-            await waiting_message.edit_text(user_friendly_error, parse_mode='Markdown')
+            error_message = run.last_error.message if run.last_error else 'Белгісіз қате'
+            logger.error(f"OpenAI Assistant run аяқталмады, статусы: {run.status}, қате: {error_message}")
+            await waiting_message.edit_text(f"Ассистент жұмысында қате: {run.status}")
 
     except Exception as e:
         logger.error(f"Хабарламаны өңдеу кезінде күтпеген қате (User ID: {user.id}): {e}", exc_info=True)
-        await waiting_message.edit_text(
-            "Кешіріңіз, күтпеген техникалық ақау пайда болды. "
-            "Администраторға хабарласыңыз."
-        )
+        await update.message.reply_text("Кешіріңіз, күтпеген техникалық ақау пайда болды. Администраторға хабарласыңыз.")
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -154,16 +135,19 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"User {user.id} ({user.full_name}) sent a photo.")
     keyboard = [[InlineKeyboardButton("👍", callback_data='like'), InlineKeyboardButton("👎", callback_data='dislike')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    waiting_message = await update.message.reply_text(random.choice(get_text('waiting_messages', lang_code)))
     
     try:
+        waiting_message = await update.message.reply_text(random.choice(get_text('waiting_messages', lang_code)))
+        
         photo_file = await update.message.photo[-1].get_file()
         photo_bytes = await photo_file.download_as_bytearray()
         image = vision.Image(content=bytes(photo_bytes))
         response = client_vision.text_detection(image=image)
-        if response.error.message:
-            raise Exception(f"Google Vision API қатесі: {response.error.message}")
         texts = response.text_annotations
+        
+        if response.error.message and not texts:
+            raise Exception(f"Google Vision API қатесі: {response.error.message}")
+            
         image_description = texts[0].description.replace('\n', ' ') if texts else "Суреттен мәтін табылмады."
         
         await waiting_message.edit_text(get_text('photo_analyzed_prompt', lang_code))
@@ -172,12 +156,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         final_query_to_openai = (
             f"{language_instruction} "
             f"Пайдаланушы маған сурет жіберді. Google Vision суреттен мынадай мәтінді оқыды: '{image_description}'.\n\n"
-            "Осы мәтіндегі негізгі атауларды анықтап, сол бойынша өзіңнің білім қорыңнан ақпаратты ізде. "
-            "Табылған ақпарат негізінде, суреттегі өнімнің халал статусы туралы толық жауап бер. "
-            "Маңызды ереже: Ешқашан сілтемелерді ойдан құрастырма және bit.ly сияқты сервистермен қысқартпа. Тек білім қорында бар нақты, толық сілтемені ғана бер."
+            "Осы мәтінге сүйеніп, өнімнің халал статусы туралы толық жауап бер."
         )
         
-        # Дұрыс: thread_id дерекқордан алынады
+        # ТҮЗЕТІЛДІ: thread_id дерекқордан алынады
         thread_id = get_thread_id(user.id)
         response_text, new_thread_id, run = await run_openai_assistant(final_query_to_openai, thread_id)
         
@@ -185,7 +167,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await waiting_message.edit_text(response_text)
             return
             
-        # Дұрыс: жаңа thread_id дерекқорға сақталады
+        # ТҮЗЕТІЛДІ: жаңа thread_id дерекқорға сақталады
         set_thread_id(user.id, new_thread_id)
         
         while run.status in ['in_progress', 'queued']:
@@ -197,22 +179,25 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             final_response = messages.data[0].content[0].text.value
             cleaned_response = re.sub(r'【.*?†source】', '', final_response).strip()
             await waiting_message.edit_text(cleaned_response, reply_markup=reply_markup, parse_mode='Markdown')
-            context.user_data[f'last_question_{waiting_message.message_id}'] = f"Image Query: {image_description}"
-            context.user_data[f'last_answer_{waiting_message.message_id}'] = cleaned_response
+            
+            # ТҮЗЕТІЛДІ: Кері байланыс үшін дерекқорды қолдану
+            set_last_q_and_a(user.id, f"Image Query: {image_description[:100]}...", cleaned_response)
         else:
             error_message = run.last_error.message if run.last_error else 'Белгісіз қате'
-            await waiting_message.edit_text(f"Ассистент жұмысында қате: {error_message}")
+            await waiting_message.edit_text(f"Ассистент жұмысында қате: {run.status}")
             
     except Exception as e:
-        logger.error(f"Суретті өңдеу қатесі (User ID: {user.id}): {e}")
-        await waiting_message.edit_text("Суретті өңдеу кезінде қате шықты.")
+        logger.error(f"Суретті өңдеу қатесі (User ID: {user.id}): {e}", exc_info=True)
+        await update.message.reply_text("Кешіріңіз, суретті өңдеу кезінде күтпеген техникалық ақау пайда болды.")
 
 
 async def language_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/language командасын өңдейді, тіл таңдау батырмаларын жібереді."""
+    user = update.effective_user
+    lang_code = get_user_language(user.id)
     keyboard = [
         [InlineKeyboardButton("🇰🇿 Қазақша", callback_data='set_lang_kk')],
         [InlineKeyboardButton("🇷🇺 Русский", callback_data='set_lang_ru')],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Тілді таңдаңыз / Выберите язык:", reply_markup=reply_markup)
+    await update.message.reply_text(get_text('change_language_button', lang_code), reply_markup=reply_markup)
