@@ -28,7 +28,6 @@ from bot.handlers.conversations import (
 )
 from bot.handlers.location_handler import location_handler
 
-
 # Логгингті баптау
 filterwarnings(
     action="ignore", message=r".*CallbackQueryHandler", category=PTBUserWarning
@@ -39,11 +38,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# FastAPI экземплярын құру
-app_fastapi = FastAPI()
-
 # --- TELEGRAM BOT SETUP ---
-application = Application.builder().token(config.TELEGRAM_TOKEN).build()
+# Вебхукты бір рет орнату үшін context_types қолданамыз
+context_types = ContextTypes(bot=Update)
+application = (
+    Application.builder()
+    .token(config.TELEGRAM_TOKEN)
+    .updater(None)  # Updater-ді өшіреміз, себебі webhook қолданамыз
+    .context_types(context_types)
+    .build()
+)
 
 # 1. Жалпы командалар
 application.add_handler(CommandHandler("start", start))
@@ -69,14 +73,17 @@ application.add_handler(MessageHandler(filters.LOCATION, location_handler))
 # 6. Қателерді өңдеу
 application.add_error_handler(error_handle)
 
-
-# --- WEBHOOK SETUP ---
-@app_fastapi.on_event("startup")
-async def startup():
-    """Webhook орнату."""
+# --- WEBHOOK SETUP with FastAPI Lifespan ---
+async def lifespan(app: FastAPI):
+    """Lifespan context: Ботты іске қосады және вебхукты орнатады."""
     await application.bot.set_webhook(url=f"{config.WEBHOOK_URL}/telegram")
-    logger.info(f"Webhook {config.WEBHOOK_URL} адресіне орнатылды")
+    async with application:
+        await application.start()
+        yield
+        await application.stop()
 
+# FastAPI экземплярын lifespan-мен құру
+app_fastapi = FastAPI(lifespan=lifespan)
 
 @app_fastapi.post("/telegram")
 async def telegram_webhook(request: Request):
@@ -86,22 +93,6 @@ async def telegram_webhook(request: Request):
     )
     return {"ok": True}
 
-
 @app_fastapi.get("/")
 def index():
     return {"message": "Bot is running..."}
-
-# Ботты polling режимінде жергілікті тестілеу үшін
-async def main_polling():
-    """Ботты polling режимінде іске қосады."""
-    logger.info("Polling режимінде іске қосылуда...")
-    await application.initialize()
-    await application.updater.start_polling()
-    await application.start()
-    logger.info("Бот polling режимінде жұмыс істеп тұр.")
-
-if __name__ == "__main__":
-    # Жергілікті тестілеу үшін осы блокты іске қосыңыз
-    # Render сияқты серверге жүктегенде бұл код орындалмайды
-    # asyncio.run(main_polling())
-    pass
