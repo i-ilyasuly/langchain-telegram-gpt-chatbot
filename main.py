@@ -1,88 +1,93 @@
-# main.py
 import logging
-import httpx
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
-from telegram import Update, Bot
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler
-from telegram.error import RetryAfter
-from bot.handlers.admin import button_handler, grant_premium, revoke_premium # импорттарды жаңарту
-from bot.handlers.common import start, handle_message, handle_photo, premium_info
-from bot.handlers.common import start, handle_message, handle_photo, premium_info, language_command
+from warnings import filterwarnings
 
+from dotenv import load_dotenv
+from telegram.warnings import PTBUserWarning
 
-from bot.config import TELEGRAM_TOKEN, WEBHOOK_URL
-from bot.handlers.common import start, handle_message, handle_photo
-from bot.handlers.admin import button_handler
-from bot.handlers.conversations import broadcast_conv_handler, update_db_conv_handler
+# Конфигурацияны импорттау
+from bot import config 
 
-# Негізгі баптаулар
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# Хэндлерлерді импорттау
+# admin.py-дан ТЕК қажетті функцияларды импорттаймыз
+from bot.handlers.admin import button_handler, grant_premium, revoke_premium
+from bot.handlers.common import error_handle, help_handle, start_handle
+from bot.handlers.conversations import (
+    conv_handler,
+    image_handler,
+    reset_handle,
+    voice_handler,
+    broadcast_message_handler,
+    get_message_for_broadcast,
+    cancel_broadcast,
+    WAITING_FOR_UPDATE_FILE,
+    BROADCAST_MESSAGE
+)
+# Сіз қосқан жаңа location_handler
+from bot.handlers.location_handler import location_handler
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    MessageHandler,
+    ConversationHandler,
+    filters,
+)
+
+filterwarnings(
+    action="ignore", message=r".*CallbackQueryHandler", category=PTBUserWarning
+)
+
+load_dotenv()
+# Enable logging
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-# Application-ды глобалды түрде құру, бірақ инициализацияны кейінге қалдыру
-application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Webhook-ты тек бір рет орнату
-    # Бұл код gunicorn-ның негізгі процесінде ғана орындалуы керек, бірақ оны анықтау қиын.
-    # Сондықтан, webhook-ты бөлек скриптпен орнатуға немесе осында қалдырып,
-    # gunicorn жұмысшыларының санын 1-ге дейін азайтуға болады.
-    # Ең дұрысы - webhook-ты бөлек орнатып алу.
-    # Бірақ қазіргі жағдайды түзету үшін webhook-ты орнату кезінде қателерді ұстап аламыз.
+def main():
+    """Start the bot."""
+    # Create the Application and pass it your bot's token.
+    application = Application.builder().token(config.TELEGRAM_TOKEN).build()
 
-    # Хэндлерлерді тіркеу
-    application.add_handler(CommandHandler("language", language_command))
-    application.add_handler(CommandHandler("premium", premium_info))
+    # --- ХЭНДЛЕРЛЕРДІ ТІРКЕУ ---
+
+    # 1. Жалпы командалар (/start, /help, /reset)
+    application.add_handler(CommandHandler("start", start_handle))
+    application.add_handler(CommandHandler("help", help_handle))
+    application.add_handler(CommandHandler("reset", reset_handle))
+
+    # 2. Админ командалары (/grant_premium, /revoke_premium)
     application.add_handler(CommandHandler("grant_premium", grant_premium))
     application.add_handler(CommandHandler("revoke_premium", revoke_premium))
-    application.add_handler(broadcast_conv_handler)
-    application.add_handler(update_db_conv_handler)
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    
+    # 3. ЛОКАЦИЯ бойынша іздеу хэндлері (сіздің негізгі функцияңыз)
+    application.add_handler(MessageHandler(filters.LOCATION, location_handler))
+
+    # 4. Түймелерді өңдейтін хэндлер (админ панелі, тіл ауыстыру, т.б.)
+    # Бұл сіздің админ панеліңіздің жұмысы үшін КЕРЕК
     application.add_handler(CallbackQueryHandler(button_handler))
-    
-    await application.initialize()
-    if WEBHOOK_URL:
-        try:
-            # Webhook-ты орнату үшін Bot-ты бөлек инициализациялау
-            bot = Bot(token=TELEGRAM_TOKEN)
-            webhook_url_with_path = f"{WEBHOOK_URL}/telegram"
-            
-            # Ағымдағы webhook ақпаратын алу
-            current_webhook_info = await bot.get_webhook_info()
 
-            # Егер webhook URL басқа болса ғана жаңарту
-            if current_webhook_info.url != webhook_url_with_path:
-                await bot.set_webhook(url=webhook_url_with_path, allowed_updates=Update.ALL_TYPES)
-                logger.info(f"🚀 Webhook сәтті орнатылды: {webhook_url_with_path}")
-            else:
-                logger.info(f"ℹ️ Webhook қазірдің өзінде дұрыс орнатылған: {webhook_url_with_path}")
+    # 5. Хабарлама тарату (broadcast) диалогы
+    broadcast_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(get_message_for_broadcast, pattern='^broadcast_start$')],
+        states={
+            BROADCAST_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_message_handler)],
+        },
+        fallbacks=[CallbackQueryHandler(cancel_broadcast, pattern='^broadcast_stop$')],
+    )
+    application.add_handler(broadcast_handler)
 
-        except RetryAfter as e:
-            logger.warning(f"Webhook орнату кезінде Flood control қатесі: {e}. Бұл gunicorn-ның бірнеше жұмысшысымен қалыпты жағдай.")
-        except Exception as e:
-            logger.error(f"Webhook орнату кезінде белгісіз қате: {e}")
-    else:
-        logger.warning("ℹ️ WEBHOOK_URL жарамсыз, бот Webhook-сыз іске қосылды.")
-        await application.bot.delete_webhook()
-    
-    yield
-    
-    await application.shutdown()
-    logger.info("🔚 Бот тоқтатылды.")
+    # 6. Негізгі диалогтар (сурет, дауыс, мәтін)
+    application.add_handler(conv_handler)
+    application.add_handler(MessageHandler(filters.VOICE, voice_handler))
+
+    # 7. Қателерді журналға жазу (ең соңында тұрғаны дұрыс)
+    application.add_error_handler(error_handle)
+
+    # Ботты іске қосу
+    application.run_polling()
 
 
-app_fastapi = FastAPI(lifespan=lifespan)
-
-@app_fastapi.post("/telegram")
-async def telegram_webhook(request: Request):
-    update = Update.de_json(await request.json(), application.bot)
-    await application.process_update(update)
-    return {"status": "ok"}
-
-@app_fastapi.get("/")
-def index():
-    return {"message": "Telegram Bot webhook режимінде жұмыс істеп тұр."}
+if __name__ == "__main__":
+    main()
